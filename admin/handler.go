@@ -2,15 +2,24 @@ package admin
 
 import (
 	"encoding/json"
+	"html/template"
+	"log"
 	"net/http"
+	"sync"
 
 	"gorm.io/gorm"
+	"my-movie-site/collector"
 	"my-movie-site/models"
 )
 
 // Handler holds dependencies for admin HTTP handlers.
 type Handler struct {
-	DB *gorm.DB
+	DB           *gorm.DB
+	CollectorURL string
+	Tmpl         *template.Template
+
+	mu      sync.Mutex
+	syncing bool
 }
 
 // DeleteSource handles DELETE /admin/source/{key}.
@@ -72,4 +81,49 @@ func (h *Handler) ReplaceBase(w http.ResponseWriter, r *http.Request) {
 func cleanOrphanMovies(db *gorm.DB) error {
 	subQuery := db.Model(&models.VideoSource{}).Select("movie_id")
 	return db.Where("id NOT IN (?)", subQuery).Delete(&models.Movie{}).Error
+}
+
+// Sync handles POST /admin/sync.
+// It asynchronously triggers a full collection run.  A debounce guard prevents
+// a second run from starting while one is already in progress; such requests
+// receive 409 Conflict.
+func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
+	if h.CollectorURL == "" {
+		http.Error(w, "collector not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	h.mu.Lock()
+	if h.syncing {
+		h.mu.Unlock()
+		http.Error(w, "sync already in progress", http.StatusConflict)
+		return
+	}
+	h.syncing = true
+	h.mu.Unlock()
+
+	go func() {
+		defer func() {
+			h.mu.Lock()
+			h.syncing = false
+			h.mu.Unlock()
+		}()
+		col := collector.New(h.CollectorURL, h.DB)
+		if err := col.Run(); err != nil {
+			log.Printf("admin: manual sync failed: %v", err)
+		} else {
+			log.Print("admin: manual sync completed")
+		}
+	}()
+
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// AdminPage handles GET /admin – serves the admin management page.
+func (h *Handler) AdminPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := h.Tmpl.ExecuteTemplate(w, "admin.html", nil); err != nil {
+		log.Printf("admin: template error: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}
 }
