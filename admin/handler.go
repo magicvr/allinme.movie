@@ -198,6 +198,60 @@ func (h *Handler) CreateCollectionSource(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(src)
 }
 
+// CategoryMappingPage handles GET /admin/category-mapping.
+// Serves the category mapping management page.
+func (h *Handler) CategoryMappingPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := h.Tmpl.ExecuteTemplate(w, "category_mapping.html", nil); err != nil {
+		log.Printf("admin: template error: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}
+}
+
+// categoryRequest is the JSON body for CreateCategory.
+type categoryRequest struct {
+	Name    string `json:"name"`
+	Enabled *bool  `json:"enabled"`
+}
+
+// ListCategories handles GET /admin/categories.
+// Returns all local categories as JSON.
+func (h *Handler) ListCategories(w http.ResponseWriter, r *http.Request) {
+	var cats []models.Category
+	if err := h.DB.Find(&cats).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(cats)
+}
+
+// CreateCategory handles POST /admin/categories.
+// Creates a new local category.
+func (h *Handler) CreateCategory(w http.ResponseWriter, r *http.Request) {
+	var req categoryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	cat := models.Category{Name: req.Name, Enabled: enabled}
+	if err := h.DB.Create(&cat).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(cat)
+}
+
 // DeleteCollectionSource handles DELETE /admin/collection-sources/{id}.
 func (h *Handler) DeleteCollectionSource(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")

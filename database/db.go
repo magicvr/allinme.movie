@@ -35,7 +35,25 @@ func Init(dsn string) {
 	sqlDB.SetMaxOpenConns(10)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
-	if err = DB.AutoMigrate(&models.Movie{}, &models.VideoSource{}, &models.CollectionSource{}, &models.CategoryMap{}); err != nil {
+	if err = DB.AutoMigrate(&models.Movie{}, &models.VideoSource{}, &models.CollectionSource{}, &models.CategoryMap{}, &models.Category{}); err != nil {
 		log.Fatalf("failed to auto migrate: %v", err)
+	}
+
+	SeedDefaultCategories(DB)
+}
+
+// SeedDefaultCategories inserts the standard local categories if the table is
+// empty (first-run initialisation).
+func SeedDefaultCategories(db *gorm.DB) {
+	var count int64
+	db.Model(&models.Category{}).Count(&count)
+	if count > 0 {
+		return
+	}
+	defaults := []string{"电影", "电视剧", "综艺", "动漫", "短剧"}
+	for _, name := range defaults {
+		if err := db.Create(&models.Category{Name: name, Enabled: true}).Error; err != nil {
+			log.Printf("database: seed category %q: %v", name, err)
+		}
 	}
 }
