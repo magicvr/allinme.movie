@@ -157,9 +157,11 @@ func (c *Collector) RunWithContext(ctx context.Context) error {
 		pageCount = 1
 	}
 
-	// Pre-populate category maps from the class list returned on the first page.
-	if c.CollectionSourceID != 0 && len(first.Class) > 0 {
-		c.populateCategoryMaps(first.Class)
+	// Sync categories from the full class list (base URL, no ac=detail).
+	if c.CollectionSourceID != 0 {
+		if err := c.SyncClasses(ctx); err != nil {
+			log.Printf("collector: SyncClasses error: %v", err)
+		}
 	}
 
 	// Process page 1 results immediately.
@@ -202,6 +204,59 @@ func (c *Collector) RunWithContext(ctx context.Context) error {
 		}()
 	}
 	wg.Wait()
+	return nil
+}
+
+// fetchClasses requests the base API URL (without ac=detail) and returns the
+// full class list embedded in the response.
+func (c *Collector) fetchClasses(ctx context.Context) ([]apiClass, error) {
+	u, err := url.Parse(c.APIURL)
+	if err != nil {
+		return nil, err
+	}
+	// Strip ac=detail so we hit the base endpoint that returns the full class list.
+	q := u.Query()
+	q.Del("ac")
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var ar apiResponse
+	if err := json.Unmarshal(body, &ar); err != nil {
+		return nil, fmt.Errorf("json decode: %w", err)
+	}
+	return ar.Class, nil
+}
+
+// SyncClasses fetches the full class list from the base API URL and builds the
+// local Category hierarchy with parent/child relationships.  It should be
+// called before processing movies so that every remote type_id has a
+// corresponding local Category and CategoryMap entry.
+func (c *Collector) SyncClasses(ctx context.Context) error {
+	if c.CollectionSourceID == 0 {
+		return nil
+	}
+	classes, err := c.fetchClasses(ctx)
+	if err != nil {
+		return fmt.Errorf("collector: SyncClasses fetch: %w", err)
+	}
+	if len(classes) > 0 {
+		c.populateCategoryMaps(classes)
+	}
 	return nil
 }
 
@@ -286,6 +341,8 @@ func (c *Collector) GetLocalCategoryID(sourceID uint, remoteTypeID string, remot
 // "ParentName > ChildName" for easy identification in the admin back-end.
 // It also auto-creates local Category records for both parent and child classes
 // and wires CategoryMap.LocalCategoryID to the finest-grained local category.
+// RemoteID is set on each Category so it can be matched back to the remote
+// type_id without relying solely on the name.
 func (c *Collector) populateCategoryMaps(classes []apiClass) {
 	// Build a lookup map from TypeID → TypeName for parent resolution.
 	nameByID := make(map[int]string, len(classes))
@@ -306,19 +363,26 @@ func (c *Collector) populateCategoryMaps(classes []apiClass) {
 		var cat models.Category
 		err := c.DB.Where("name = ? AND parent_id = 0", cl.TypeName).First(&cat).Error
 		if err == gorm.ErrRecordNotFound {
-			cat = models.Category{Name: cl.TypeName, ParentID: 0, Enabled: true}
+			cat = models.Category{Name: cl.TypeName, ParentID: 0, RemoteID: cl.TypeID, Enabled: true}
 			if createErr := c.DB.Create(&cat).Error; createErr != nil {
 				log.Printf("collector: populateCategoryMaps create parent category %q: %v", cl.TypeName, createErr)
 			}
 		} else if err != nil {
 			log.Printf("collector: populateCategoryMaps find parent category %q: %v", cl.TypeName, err)
+		} else if cat.RemoteID == 0 {
+			// Back-fill RemoteID on existing rows that predate this feature.
+			if updateErr := c.DB.Model(&cat).Update("remote_id", cl.TypeID).Error; updateErr != nil {
+				log.Printf("collector: populateCategoryMaps update remote_id for %q: %v", cl.TypeName, updateErr)
+			} else {
+				cat.RemoteID = cl.TypeID
+			}
 		}
 		if cat.ID != 0 {
 			localParentCatByRemoteID[cl.TypeID] = cat.ID
 		}
 
 		// Upsert the CategoryMap row for this parent class.
-		c.upsertCategoryMap(typeIDStr, cl.TypeName, cat.ID)
+		c.upsertCategoryMap(typeIDStr, cl.TypeName, cat.ID, 0)
 	}
 
 	// Pass 2: ensure a local Category exists for every child class and update
@@ -341,26 +405,33 @@ func (c *Collector) populateCategoryMaps(classes []apiClass) {
 		if parentLocalID != 0 {
 			err := c.DB.Where("name = ? AND parent_id = ?", cl.TypeName, parentLocalID).First(&cat).Error
 			if err == gorm.ErrRecordNotFound {
-				cat = models.Category{Name: cl.TypeName, ParentID: parentLocalID, Enabled: true}
+				cat = models.Category{Name: cl.TypeName, ParentID: parentLocalID, RemoteID: cl.TypeID, Enabled: true}
 				if createErr := c.DB.Create(&cat).Error; createErr != nil {
 					log.Printf("collector: populateCategoryMaps create child category %q: %v", cl.TypeName, createErr)
 				}
 			} else if err != nil {
 				log.Printf("collector: populateCategoryMaps find child category %q: %v", cl.TypeName, err)
+			} else if cat.RemoteID == 0 {
+				// Back-fill RemoteID on existing rows that predate this feature.
+				if updateErr := c.DB.Model(&cat).Update("remote_id", cl.TypeID).Error; updateErr != nil {
+					log.Printf("collector: populateCategoryMaps update remote_id for %q: %v", cl.TypeName, updateErr)
+				} else {
+					cat.RemoteID = cl.TypeID
+				}
 			}
 		}
 
 		// Upsert the CategoryMap row for this child class, pointing to the child
-		// local Category (finest granularity).
-		c.upsertCategoryMap(typeIDStr, displayName, cat.ID)
+		// local Category (finest granularity), recording the remote parent type.
+		c.upsertCategoryMap(typeIDStr, displayName, cat.ID, cl.TypePID)
 	}
 }
 
 // upsertCategoryMap inserts or selectively updates a CategoryMap row.
-// If the row does not exist it is created with the given remoteName and
-// localCategoryID.  If it already exists, only blank remoteName / zero
-// localCategoryID fields are backfilled.
-func (c *Collector) upsertCategoryMap(remoteTypeID, remoteName string, localCategoryID uint) {
+// If the row does not exist it is created with the given remoteName,
+// localCategoryID and remoteTypePID.  If it already exists, only blank
+// remoteName / zero localCategoryID / zero remoteTypePID fields are backfilled.
+func (c *Collector) upsertCategoryMap(remoteTypeID, remoteName string, localCategoryID uint, remoteTypePID int) {
 	var cm models.CategoryMap
 	err := c.DB.Where("source_id = ? AND remote_type_id = ?", c.CollectionSourceID, remoteTypeID).First(&cm).Error
 	if err == gorm.ErrRecordNotFound {
@@ -368,6 +439,7 @@ func (c *Collector) upsertCategoryMap(remoteTypeID, remoteName string, localCate
 			SourceID:        c.CollectionSourceID,
 			RemoteTypeID:    remoteTypeID,
 			RemoteName:      remoteName,
+			RemoteTypePID:   remoteTypePID,
 			LocalCategoryID: localCategoryID,
 		}
 		if createErr := c.DB.Create(&cm).Error; createErr != nil {
@@ -386,6 +458,9 @@ func (c *Collector) upsertCategoryMap(remoteTypeID, remoteName string, localCate
 	if cm.LocalCategoryID == 0 && localCategoryID != 0 {
 		updates["local_category_id"] = localCategoryID
 	}
+	if cm.RemoteTypePID == 0 && remoteTypePID != 0 {
+		updates["remote_type_pid"] = remoteTypePID
+	}
 	if len(updates) > 0 {
 		if updateErr := c.DB.Model(&cm).Updates(updates).Error; updateErr != nil {
 			log.Printf("collector: upsertCategoryMap update error: %v", updateErr)
@@ -401,6 +476,11 @@ func (c *Collector) upsertMovie(am apiMovie) error {
 	}
 
 	localCatID := c.GetLocalCategoryID(c.CollectionSourceID, fmt.Sprintf("%d", am.VodTypeID), am.TypeName)
+	// If the secondary (type_id) classification has no local mapping yet,
+	// fall back to the primary (type_id_1) classification.
+	if localCatID == 0 && am.TypeID1 > 0 && am.TypeID1 != am.VodTypeID {
+		localCatID = c.GetLocalCategoryID(c.CollectionSourceID, fmt.Sprintf("%d", am.TypeID1), "")
+	}
 
 	description := stripHTML(am.VodContent)
 
