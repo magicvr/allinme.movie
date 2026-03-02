@@ -1,6 +1,7 @@
 package main
 
 import (
+	"html/template"
 	"log"
 	"net/http"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"my-movie-site/admin"
 	"my-movie-site/api"
 	"my-movie-site/database"
+	"my-movie-site/web"
 )
 
 func main() {
@@ -17,10 +19,19 @@ func main() {
 	}
 	database.Init(dsn)
 
+	tmplPath := os.Getenv("TEMPLATE_DIR")
+	if tmplPath == "" {
+		tmplPath = "templates/index.html"
+	}
+	tmpl := template.Must(template.ParseFiles(tmplPath))
+
 	h := &admin.Handler{DB: database.DB}
 	a := &api.Handler{DB: database.DB}
+	w := &web.Handler{DB: database.DB, Tmpl: tmpl}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /", w.Index)
+	mux.HandleFunc("GET /search", w.Search)
 	mux.HandleFunc("DELETE /admin/source/{key}", h.DeleteSource)
 	mux.HandleFunc("PUT /admin/source/replace-base", h.ReplaceBase)
 	mux.HandleFunc("GET /api/movies", a.ListMovies)
