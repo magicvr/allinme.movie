@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"html/template"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"my-movie-site/admin"
 	"my-movie-site/api"
 	"my-movie-site/database"
+	"my-movie-site/scheduler"
 	"my-movie-site/web"
 )
 
@@ -18,6 +22,20 @@ func main() {
 		dsn = "movie.db"
 	}
 	database.Init(dsn)
+
+	// Start the cron scheduler if a collector API URL is provided.
+	var sched *scheduler.Scheduler
+	collectorURL := os.Getenv("COLLECTOR_API_URL")
+	if collectorURL != "" {
+		cronSchedule := os.Getenv("CRON_SCHEDULE")
+		if cronSchedule == "" {
+			cronSchedule = "0 */6 * * *"
+		}
+		sched = scheduler.New(collectorURL, database.DB)
+		if err := sched.Start(cronSchedule); err != nil {
+			log.Fatalf("failed to start scheduler: %v", err)
+		}
+	}
 
 	tmplDir := os.Getenv("TEMPLATE_DIR")
 	if tmplDir == "" {
@@ -43,8 +61,25 @@ func main() {
 	if addr == "" {
 		addr = ":8080"
 	}
+
+	srv := &http.Server{Addr: addr, Handler: mux}
+
+	// Listen for SIGINT/SIGTERM to shut down gracefully.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-quit
+		log.Print("shutting down…")
+		if sched != nil {
+			sched.Stop()
+		}
+		if err := srv.Shutdown(context.Background()); err != nil {
+			log.Printf("server shutdown error: %v", err)
+		}
+	}()
+
 	log.Printf("starting server on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }

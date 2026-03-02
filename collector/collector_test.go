@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -216,5 +217,34 @@ func TestCollectorRun_SkipsMalformedMovie(t *testing.T) {
 	db.Model(&models.Movie{}).Count(&count)
 	if count != 1 {
 		t.Errorf("movie count = %d, want 1", count)
+	}
+}
+
+func TestNewIncremental_AppendsHParam(t *testing.T) {
+	db := newTestDB(t)
+	var receivedQueries []url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedQueries = append(receivedQueries, r.URL.Query())
+		resp := apiResponse{
+			PageCount: 1,
+			List:      []apiMovie{{VodID: 1, VodName: "Incremental Movie", VodPlayURL: "HD$http://example.com/hd.m3u8"}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := NewIncremental(srv.URL+"?", db, 24)
+	if err := c.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(receivedQueries) == 0 {
+		t.Fatal("no API requests made")
+	}
+	for i, q := range receivedQueries {
+		if got := q.Get("h"); got != "24" {
+			t.Errorf("request %d: h param = %q, want \"24\"", i, got)
+		}
 	}
 }

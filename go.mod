@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/glebarez/sqlite v1.11.0
+	github.com/robfig/cron/v3 v3.0.1
 	gorm.io/gorm v1.31.1
 )
 

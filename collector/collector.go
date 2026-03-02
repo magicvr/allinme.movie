@@ -43,9 +43,12 @@ type Collector struct {
 	DB         *gorm.DB
 	MaxWorkers int
 	HTTPClient *http.Client
+	// Hours, when > 0, limits collection to resources updated within the last
+	// N hours by appending &h=N to every API request (incremental mode).
+	Hours int
 }
 
-// New returns a Collector with sensible defaults.
+// New returns a Collector with sensible defaults (full collection).
 func New(apiURL string, db *gorm.DB) *Collector {
 	return &Collector{
 		APIURL:     apiURL,
@@ -53,6 +56,14 @@ func New(apiURL string, db *gorm.DB) *Collector {
 		MaxWorkers: defaultMaxWorkers,
 		HTTPClient: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// NewIncremental returns a Collector that only fetches resources updated
+// within the last hours hours (incremental collection).
+func NewIncremental(apiURL string, db *gorm.DB, hours int) *Collector {
+	c := New(apiURL, db)
+	c.Hours = hours
+	return c
 }
 
 // Run fetches every page and upserts movies into the database.
@@ -114,6 +125,9 @@ func (c *Collector) RunWithContext(ctx context.Context) error {
 // fetchPage requests a single page from the API and decodes the response.
 func (c *Collector) fetchPage(ctx context.Context, page int) (*apiResponse, error) {
 	url := fmt.Sprintf("%s&pg=%d", c.APIURL, page)
+	if c.Hours > 0 {
+		url = fmt.Sprintf("%s&h=%d", url, c.Hours)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
