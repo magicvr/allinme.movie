@@ -19,11 +19,11 @@ func main() {
 	}
 	database.Init(dsn)
 
-	tmplPath := os.Getenv("TEMPLATE_DIR")
-	if tmplPath == "" {
-		tmplPath = "templates/index.html"
+	tmplDir := os.Getenv("TEMPLATE_DIR")
+	if tmplDir == "" {
+		tmplDir = "templates"
 	}
-	tmpl := template.Must(template.ParseFiles(tmplPath))
+	tmpl := template.Must(template.ParseGlob(tmplDir + "/*.html"))
 
 	h := &admin.Handler{DB: database.DB}
 	a := &api.Handler{DB: database.DB}
@@ -32,6 +32,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", w.Index)
 	mux.HandleFunc("GET /search", w.Search)
+	mux.HandleFunc("GET /movie/{id}", w.Detail)
 	mux.HandleFunc("DELETE /admin/source/{key}", h.DeleteSource)
 	mux.HandleFunc("PUT /admin/source/replace-base", h.ReplaceBase)
 	mux.HandleFunc("GET /api/movies", a.ListMovies)
