@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -195,11 +196,18 @@ func (c *Collector) RunWithContext(ctx context.Context) error {
 
 // fetchPage requests a single page from the API and decodes the response.
 func (c *Collector) fetchPage(ctx context.Context, page int) (*apiResponse, error) {
-	url := fmt.Sprintf("%s&ac=detail&pg=%d", c.APIURL, page)
-	if c.Hours > 0 {
-		url = fmt.Sprintf("%s&h=%d", url, c.Hours)
+	u, err := url.Parse(c.APIURL)
+	if err != nil {
+		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	q := u.Query()
+	q.Set("ac", "detail")
+	q.Set("pg", strconv.Itoa(page))
+	if c.Hours > 0 {
+		q.Set("h", strconv.Itoa(c.Hours))
+	}
+	u.RawQuery = q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
 	}
