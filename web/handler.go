@@ -7,8 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"gorm.io/gorm"
 	"my-movie-site/models"
+
+	"gorm.io/gorm"
 )
 
 // sqlEscaper escapes LIKE special characters for safe SQL fuzzy matching.
@@ -16,23 +17,26 @@ var sqlEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
 // Handler serves HTML pages using html/template.
 type Handler struct {
-	DB   *gorm.DB
-	Tmpl *template.Template
+	DB        *gorm.DB
+	Tmpl      *template.Template
+	SiteTitle string
 }
 
 // pageData is passed to every template render.
 type pageData struct {
-	Query       string
-	Movies      []models.Movie
-	Categories  []models.Category // top-level categories with Children preloaded
-	ActiveCat   uint              // selected parent category ID (from ?cat=)
-	ActiveSubCat uint             // selected sub-category ID (from ?sub_cat=)
+	Query        string
+	Movies       []models.Movie
+	Categories   []models.Category // top-level categories with Children preloaded
+	ActiveCat    uint              // selected parent category ID (from ?cat=)
+	ActiveSubCat uint              // selected sub-category ID (from ?sub_cat=)
+	SiteTitle    string
 }
 
 // detailPageData is passed to the detail template.
 type detailPageData struct {
-	Movie   models.Movie
-	Sources []models.VideoSource
+	Movie     models.Movie
+	Sources   []models.VideoSource
+	SiteTitle string
 }
 
 // Index handles GET / – shows the most recently updated movies.
@@ -78,6 +82,7 @@ func (h *Handler) Index(w http.ResponseWriter, r *http.Request) {
 		Categories:   categories,
 		ActiveCat:    activeCat,
 		ActiveSubCat: activeSubCat,
+		SiteTitle:    h.SiteTitle,
 	})
 }
 
@@ -98,7 +103,7 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.render(w, pageData{Query: q, Movies: movies, Categories: h.loadCategoryTree()})
+	h.render(w, pageData{Query: q, Movies: movies, Categories: h.loadCategoryTree(), SiteTitle: h.SiteTitle})
 }
 
 // loadCategoryTree returns all enabled top-level categories with their enabled
@@ -149,5 +154,5 @@ func (h *Handler) Detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.renderTemplate(w, "detail.html", detailPageData{Movie: movie, Sources: movie.VideoSources})
+	h.renderTemplate(w, "detail.html", detailPageData{Movie: movie, Sources: movie.VideoSources, SiteTitle: h.SiteTitle})
 }

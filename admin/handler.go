@@ -7,9 +7,10 @@ import (
 	"net/http"
 	"sync"
 
-	"gorm.io/gorm"
 	"my-movie-site/collector"
 	"my-movie-site/models"
+
+	"gorm.io/gorm"
 )
 
 // Handler holds dependencies for admin HTTP handlers.
@@ -17,6 +18,7 @@ type Handler struct {
 	DB           *gorm.DB
 	CollectorURL string
 	Tmpl         *template.Template
+	SiteTitle    string
 
 	mu      sync.Mutex
 	syncing bool
@@ -141,7 +143,8 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 // AdminPage handles GET /admin – serves the admin management page.
 func (h *Handler) AdminPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.Tmpl.ExecuteTemplate(w, "admin.html", nil); err != nil {
+	data := struct{ SiteTitle string }{SiteTitle: h.SiteTitle}
+	if err := h.Tmpl.ExecuteTemplate(w, "admin.html", data); err != nil {
 		log.Printf("admin: template error: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 	}
@@ -202,7 +205,8 @@ func (h *Handler) CreateCollectionSource(w http.ResponseWriter, r *http.Request)
 // Serves the category mapping management page.
 func (h *Handler) CategoryMappingPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.Tmpl.ExecuteTemplate(w, "category_mapping.html", nil); err != nil {
+	data := struct{ SiteTitle string }{SiteTitle: h.SiteTitle}
+	if err := h.Tmpl.ExecuteTemplate(w, "category_mapping.html", data); err != nil {
 		log.Printf("admin: template error: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 	}

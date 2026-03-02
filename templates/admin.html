@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>管理后台 – AllInMe Movie</title>
+  <title>管理后台 – {{.SiteTitle}}</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-950 text-white min-h-screen">
@@ -11,7 +11,7 @@
   <!-- Navbar -->
   <nav class="bg-gray-900 shadow-md sticky top-0 z-50">
     <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
-      <a href="/" class="text-red-500 font-bold text-xl tracking-wide shrink-0">AllInMe Movie</a>
+      <a href="/" class="text-red-500 font-bold text-xl tracking-wide shrink-0">{{.SiteTitle}}</a>
       <span class="text-gray-400 text-sm">管理后台</span>
     </div>
   </nav>

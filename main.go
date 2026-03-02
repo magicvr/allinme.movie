@@ -43,9 +43,13 @@ func main() {
 	}
 	tmpl := template.Must(template.ParseGlob(tmplDir + "/*.html"))
 
-	h := &admin.Handler{DB: database.DB, CollectorURL: collectorURL, Tmpl: tmpl}
+	siteTitle := os.Getenv("SITE_TITLE")
+	if siteTitle == "" {
+		siteTitle = "AllInMe Movie"
+	}
+	h := &admin.Handler{DB: database.DB, CollectorURL: collectorURL, Tmpl: tmpl, SiteTitle: siteTitle}
 	a := &api.Handler{DB: database.DB}
-	w := &web.Handler{DB: database.DB, Tmpl: tmpl}
+	w := &web.Handler{DB: database.DB, Tmpl: tmpl, SiteTitle: siteTitle}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", w.Index)
