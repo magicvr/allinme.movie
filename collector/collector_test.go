@@ -382,7 +382,7 @@ func TestGetLocalCategoryID_CreatesMissingMapping(t *testing.T) {
 	db := newTestDB(t)
 	c := &Collector{DB: db}
 
-	id := c.GetLocalCategoryID(1, "action")
+	id := c.GetLocalCategoryID(1, "action", "Action")
 	if id != 0 {
 		t.Errorf("expected 0 for unmapped category, got %d", id)
 	}
@@ -566,5 +566,131 @@ func TestPopulateCategoryMaps(t *testing.T) {
 		t.Error("CategoryMap for type_id=2 not found")
 	} else if cm.RemoteName != "电视剧" {
 		t.Errorf("RemoteName for type_id=2 = %q, want 电视剧", cm.RemoteName)
+	}
+}
+
+// TestPopulateCategoryMaps_Hierarchical verifies that child categories are
+// stored with "ParentName > ChildName" format when type_pid is set.
+func TestPopulateCategoryMaps_Hierarchical(t *testing.T) {
+	db := newTestDB(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := apiResponse{
+			PageCount: 1,
+			Class: []apiClass{
+				{TypeID: 2, TypePID: 0, TypeName: "连续剧"},
+				{TypeID: 16, TypePID: 2, TypeName: "韩剧"},
+				{TypeID: 22, TypePID: 2, TypeName: "日本剧"},
+			},
+			List: []apiMovie{{VodID: 1, VodName: "Hierarchical Movie", VodPlayURL: "HD$http://example.com/hd.m3u8"}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	src := models.CollectionSource{Name: "H", APIURL: srv.URL + "?", SourceKey: "h", Enabled: boolPtr(true)}
+	db.Create(&src)
+
+	c := New(srv.URL+"?", db)
+	c.CollectionSourceID = src.ID
+	if err := c.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var rows []models.CategoryMap
+	db.Where("source_id = ?", src.ID).Find(&rows)
+	byID := make(map[string]models.CategoryMap)
+	for _, r := range rows {
+		byID[r.RemoteTypeID] = r
+	}
+
+	// Parent category stored as-is.
+	if cm, ok := byID["2"]; !ok {
+		t.Error("CategoryMap for type_id=2 not found")
+	} else if cm.RemoteName != "连续剧" {
+		t.Errorf("RemoteName for type_id=2 = %q, want 连续剧", cm.RemoteName)
+	}
+
+	// Child categories stored with "Parent > Child" format.
+	if cm, ok := byID["16"]; !ok {
+		t.Error("CategoryMap for type_id=16 not found")
+	} else if cm.RemoteName != "连续剧 > 韩剧" {
+		t.Errorf("RemoteName for type_id=16 = %q, want 连续剧 > 韩剧", cm.RemoteName)
+	}
+
+	if cm, ok := byID["22"]; !ok {
+		t.Error("CategoryMap for type_id=22 not found")
+	} else if cm.RemoteName != "连续剧 > 日本剧" {
+		t.Errorf("RemoteName for type_id=22 = %q, want 连续剧 > 日本剧", cm.RemoteName)
+	}
+}
+
+// TestStripHTML verifies that HTML tags are removed from content.
+func TestStripHTML(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "plain text", input: "hello world", want: "hello world"},
+		{name: "paragraph tag", input: "<p>hello</p>", want: "hello"},
+		{name: "span tag", input: "<span>world</span>", want: "world"},
+		{name: "nested tags", input: "<p><span>foo</span></p>", want: "foo"},
+		{name: "empty", input: "", want: ""},
+		{name: "leading/trailing whitespace", input: "  <p>text</p>  ", want: "text"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := stripHTML(tc.input)
+			if got != tc.want {
+				t.Errorf("stripHTML(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestUpsertMovie_HTMLStripped verifies that HTML in vod_content is stripped
+// before the description is stored in the database.
+func TestUpsertMovie_HTMLStripped(t *testing.T) {
+	db := newTestDB(t)
+	srv := fakeServer(t, [][]apiMovie{
+		{
+			{
+				VodID:      1,
+				VodName:    "HTML Movie",
+				VodContent: "<p><span>Simple description.</span></p>",
+				VodPlayURL: "HD$http://example.com/hd.m3u8",
+			},
+		},
+	})
+	defer srv.Close()
+
+	c := New(srv.URL+"?", db)
+	if err := c.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var movie models.Movie
+	db.First(&movie)
+	if movie.Description != "Simple description." {
+		t.Errorf("Description = %q, want %q", movie.Description, "Simple description.")
+	}
+}
+
+// TestGetLocalCategoryID_StoresRemoteName verifies that the remoteName is
+// persisted when a new placeholder CategoryMap row is created.
+func TestGetLocalCategoryID_StoresRemoteName(t *testing.T) {
+	db := newTestDB(t)
+	c := &Collector{DB: db, CollectionSourceID: 1}
+
+	c.GetLocalCategoryID(1, "22", "日本剧")
+
+	var cm models.CategoryMap
+	if err := db.Where("source_id = ? AND remote_type_id = ?", 1, "22").First(&cm).Error; err != nil {
+		t.Fatalf("CategoryMap row not found: %v", err)
+	}
+	if cm.RemoteName != "日本剧" {
+		t.Errorf("RemoteName = %q, want 日本剧", cm.RemoteName)
 	}
 }
