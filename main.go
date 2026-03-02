@@ -55,9 +55,14 @@ func main() {
 	mux.HandleFunc("DELETE /admin/source/{key}", h.DeleteSource)
 	mux.HandleFunc("PUT /admin/source/replace-base", h.ReplaceBase)
 	mux.HandleFunc("POST /admin/sync", h.Sync)
+	mux.HandleFunc("GET /admin/collection-sources", h.ListCollectionSources)
+	mux.HandleFunc("POST /admin/collection-sources", h.CreateCollectionSource)
+	mux.HandleFunc("DELETE /admin/collection-sources/{id}", h.DeleteCollectionSource)
 	mux.HandleFunc("GET /api/movies", a.ListMovies)
 	mux.HandleFunc("GET /api/search", a.SearchMovies)
 	mux.HandleFunc("GET /api/movie/{id}", a.GetMovie)
+	mux.HandleFunc("GET /api/admin/category-maps/unmapped", a.ListUnmappedCategories)
+	mux.HandleFunc("PUT /api/admin/category-maps", a.UpdateCategoryMaps)
 
 	addr := os.Getenv("ADDR")
 	if addr == "" {

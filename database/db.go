@@ -17,7 +17,7 @@ func Init(dsn string) {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
 
-	if err = DB.AutoMigrate(&models.Movie{}, &models.VideoSource{}); err != nil {
+	if err = DB.AutoMigrate(&models.Movie{}, &models.VideoSource{}, &models.CollectionSource{}, &models.CategoryMap{}); err != nil {
 		log.Fatalf("failed to auto migrate: %v", err)
 	}
 }

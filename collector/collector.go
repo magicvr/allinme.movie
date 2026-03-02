@@ -29,6 +29,7 @@ type apiMovie struct {
 	VodArea    string `json:"vod_area"`
 	VodClass   string `json:"vod_class"`
 	VodPlayURL string `json:"vod_play_url"`
+	VodTypeID  int    `json:"type_id"`
 }
 
 // apiResponse maps the top-level JSON structure.
@@ -46,6 +47,12 @@ type Collector struct {
 	// Hours, when > 0, limits collection to resources updated within the last
 	// N hours by appending &h=N to every API request (incremental mode).
 	Hours int
+	// CollectionSourceID is the ID of the CollectionSource record this
+	// collector is running for.  0 means no specific source (legacy mode).
+	CollectionSourceID uint
+	// SourceName is the display name of the collection source, stored on
+	// each VideoSource record so the player can label the buttons.
+	SourceName string
 }
 
 // New returns a Collector with sensible defaults (full collection).
@@ -64,6 +71,25 @@ func NewIncremental(apiURL string, db *gorm.DB, hours int) *Collector {
 	c := New(apiURL, db)
 	c.Hours = hours
 	return c
+}
+
+// RunAllFromDB loads every enabled CollectionSource from the database and runs
+// a full collection pass for each one in sequence.
+func RunAllFromDB(ctx context.Context, db *gorm.DB) error {
+	var sources []models.CollectionSource
+	if err := db.Where("enabled = ?", true).Find(&sources).Error; err != nil {
+		return fmt.Errorf("collector: fetch sources from db: %w", err)
+	}
+	for _, src := range sources {
+		c := New(src.APIURL, db)
+		c.CollectionSourceID = src.ID
+		c.SourceName = src.Name
+		log.Printf("collector: running source %q (key=%s)", src.Name, src.SourceKey)
+		if err := c.RunWithContext(ctx); err != nil {
+			log.Printf("collector: source %q failed: %v", src.Name, err)
+		}
+	}
+	return nil
 }
 
 // Run fetches every page and upserts movies into the database.
@@ -159,46 +185,92 @@ func (c *Collector) processMovies(list []apiMovie) {
 	}
 }
 
+// GetLocalCategoryID returns the local category ID for a given source and
+// remote type ID.  If no mapping exists it inserts a placeholder record with
+// LocalCategoryID = 0 (to-be-bound) and returns 0.
+func (c *Collector) GetLocalCategoryID(sourceID uint, remoteTypeID string) uint {
+	if sourceID == 0 || remoteTypeID == "" {
+		return 0
+	}
+	cm := models.CategoryMap{SourceID: sourceID, RemoteTypeID: remoteTypeID}
+	result := c.DB.Where(models.CategoryMap{SourceID: sourceID, RemoteTypeID: remoteTypeID}).
+		FirstOrCreate(&cm)
+	if result.Error != nil {
+		log.Printf("collector: GetLocalCategoryID error: %v", result.Error)
+		return 0
+	}
+	return cm.LocalCategoryID
+}
+
 // upsertMovie converts an apiMovie to DB records and performs an upsert.
+// Movies are matched by Title to enable cross-source aggregation.
 func (c *Collector) upsertMovie(am apiMovie) error {
 	if am.VodName == "" {
 		return fmt.Errorf("empty vod_name")
 	}
 
-	thirdPartyID := fmt.Sprintf("%d", am.VodID)
+	localCatID := c.GetLocalCategoryID(c.CollectionSourceID, fmt.Sprintf("%d", am.VodTypeID))
 
-	attrs := models.Movie{
-		ThirdPartyID: thirdPartyID,
-		Title:        am.VodName,
-		SubTitle:     am.VodSub,
-		Poster:       am.VodPic,
-		Description:  am.VodContent,
-		Year:         am.VodYear,
-		Area:         am.VodArea,
-		Class:        am.VodClass,
-		UpdateTime:   time.Now(),
+	attrs := map[string]interface{}{
+		"sub_title":   am.VodSub,
+		"poster":      am.VodPic,
+		"description": am.VodContent,
+		"year":        am.VodYear,
+		"area":        am.VodArea,
+		"class":       am.VodClass,
+		"category_id": localCatID,
+		"update_time": time.Now(),
 	}
 
-	// Upsert: insert or update on conflict of ThirdPartyID.
-	movie := models.Movie{ThirdPartyID: thirdPartyID}
-	result := c.DB.
-		Where(models.Movie{ThirdPartyID: thirdPartyID}).
-		Assign(attrs).
-		FirstOrCreate(&movie)
-	if result.Error != nil {
+	// Look up by Title for multi-source aggregation.
+	var movie models.Movie
+	result := c.DB.Where("title = ?", am.VodName).First(&movie)
+	if result.Error == gorm.ErrRecordNotFound {
+		movie = models.Movie{
+			Title:        am.VodName,
+			ThirdPartyID: fmt.Sprintf("%d", am.VodID),
+			SubTitle:     am.VodSub,
+			Poster:       am.VodPic,
+			Description:  am.VodContent,
+			Year:         am.VodYear,
+			Area:         am.VodArea,
+			Class:        am.VodClass,
+			CategoryID:   localCatID,
+			UpdateTime:   time.Now(),
+		}
+		if err := c.DB.Create(&movie).Error; err != nil {
+			return err
+		}
+	} else if result.Error != nil {
 		return result.Error
+	} else {
+		// Update movie info; most recent collection wins.
+		if err := c.DB.Model(&movie).Updates(attrs).Error; err != nil {
+			return err
+		}
 	}
 
-	newSources := parseVideoSources(am.VodPlayURL, movie.ID)
+	newSources := parseVideoSources(am.VodPlayURL, movie.ID, c.CollectionSourceID, c.SourceName)
 
-	// Replace sources inside a transaction so reads and writes are consistent.
+	// Replace sources for this collection source inside a transaction.
 	return c.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("movie_id = ?", movie.ID).Delete(&models.VideoSource{}).Error; err != nil {
+		del := tx.Where("movie_id = ?", movie.ID)
+		if c.CollectionSourceID != 0 {
+			// Only delete sources that belong to the current collection source.
+			del = del.Where("collection_source_id = ?", c.CollectionSourceID)
+		}
+		if err := del.Delete(&models.VideoSource{}).Error; err != nil {
 			return fmt.Errorf("delete old sources: %w", err)
 		}
+
 		if len(newSources) == 0 {
-			// Orphan check: delete a movie that ends up with no video sources.
-			return tx.Delete(&models.Movie{}, movie.ID).Error
+			// Orphan check: delete movie only when it has no sources at all.
+			var remaining int64
+			tx.Model(&models.VideoSource{}).Where("movie_id = ?", movie.ID).Count(&remaining)
+			if remaining == 0 {
+				return tx.Delete(&models.Movie{}, movie.ID).Error
+			}
+			return nil
 		}
 		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&newSources).Error
 	})
@@ -206,7 +278,7 @@ func (c *Collector) upsertMovie(am apiMovie) error {
 
 // parseVideoSources parses the vod_play_url field.
 // Format: "名称$URL#名称$URL#..."
-func parseVideoSources(raw string, movieID uint) []models.VideoSource {
+func parseVideoSources(raw string, movieID uint, collectionSourceID uint, sourceName string) []models.VideoSource {
 	if raw == "" {
 		return nil
 	}
@@ -222,10 +294,13 @@ func parseVideoSources(raw string, movieID uint) []models.VideoSource {
 			continue
 		}
 		sources = append(sources, models.VideoSource{
-			MovieID:   movieID,
-			SourceKey: strings.TrimSpace(parts[0]),
-			RawURL:    strings.TrimSpace(parts[1]),
+			MovieID:            movieID,
+			CollectionSourceID: collectionSourceID,
+			SourceKey:          strings.TrimSpace(parts[0]),
+			SourceName:         sourceName,
+			RawURL:             strings.TrimSpace(parts[1]),
 		})
 	}
 	return sources
 }
+

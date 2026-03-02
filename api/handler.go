@@ -29,6 +29,12 @@ type movieDetail struct {
 	VideoSources []models.VideoSource `json:"video_sources"`
 }
 
+// categoryMapUpdate is used in the bulk-update request body.
+type categoryMapUpdate struct {
+	ID              uint `json:"id"`
+	LocalCategoryID uint `json:"local_category_id"`
+}
+
 // ListMovies handles GET /api/movies.
 // Query params: page (default 1), size (default 20), class, area, year.
 func (h *Handler) ListMovies(w http.ResponseWriter, r *http.Request) {
@@ -122,6 +128,36 @@ func (h *Handler) GetMovie(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, movieDetail{Movie: movie, VideoSources: sources})
+}
+
+// ListUnmappedCategories handles GET /api/admin/category-maps/unmapped.
+// Returns all CategoryMap entries where LocalCategoryID = 0 (to-be-bound).
+func (h *Handler) ListUnmappedCategories(w http.ResponseWriter, r *http.Request) {
+	var maps []models.CategoryMap
+	if err := h.DB.Where("local_category_id = 0").Find(&maps).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, maps)
+}
+
+// UpdateCategoryMaps handles PUT /api/admin/category-maps.
+// Accepts a JSON array of {id, local_category_id} objects and bulk-updates them.
+func (h *Handler) UpdateCategoryMaps(w http.ResponseWriter, r *http.Request) {
+	var updates []categoryMapUpdate
+	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	for _, u := range updates {
+		if err := h.DB.Model(&models.CategoryMap{}).
+			Where("id = ?", u.ID).
+			Update("local_category_id", u.LocalCategoryID).Error; err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
