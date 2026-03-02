@@ -6,5 +6,6 @@ type CategoryMap struct {
 	ID              uint   `gorm:"primaryKey"`
 	SourceID        uint   `gorm:"not null;uniqueIndex:idx_catmap_source_remote"`
 	RemoteTypeID    string `gorm:"not null;uniqueIndex:idx_catmap_source_remote"`
+	RemoteName      string // human-readable category name from the remote API class list
 	LocalCategoryID uint   `gorm:"default:0"`
 }

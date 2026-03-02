@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,24 +20,57 @@ import (
 
 const defaultMaxWorkers = 1
 
+// flexInt handles vod_id values that may be returned as either a JSON number
+// or a quoted string by different API sources.
+type flexInt int
+
+func (f *flexInt) UnmarshalJSON(data []byte) error {
+	// Try integer first.
+	var n int
+	if err := json.Unmarshal(data, &n); err == nil {
+		*f = flexInt(n)
+		return nil
+	}
+	// Fall back to string.
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("flexInt: cannot parse %s: %w", data, err)
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return fmt.Errorf("flexInt: cannot convert %q to int: %w", s, err)
+	}
+	*f = flexInt(n)
+	return nil
+}
+
 // apiMovie maps the JSON fields returned by the remote API.
 type apiMovie struct {
-	VodID      int    `json:"vod_id"`
-	VodName    string `json:"vod_name"`
-	VodSub     string `json:"vod_sub"`
-	VodPic     string `json:"vod_pic"`
-	VodContent string `json:"vod_content"`
-	VodYear    string `json:"vod_year"`
-	VodArea    string `json:"vod_area"`
-	VodClass   string `json:"vod_class"`
-	VodPlayURL string `json:"vod_play_url"`
-	VodTypeID  int    `json:"type_id"`
+	VodID      flexInt `json:"vod_id"`
+	VodName    string  `json:"vod_name"`
+	VodSub     string  `json:"vod_sub"`
+	VodPic     string  `json:"vod_pic"`
+	VodContent string  `json:"vod_content"`
+	VodYear    string  `json:"vod_year"`
+	VodArea    string  `json:"vod_area"`
+	VodClass   string  `json:"vod_class"`
+	VodPlayURL string  `json:"vod_play_url"`
+	VodTypeID  int     `json:"type_id"`
+	TypeName   string  `json:"type_name"`
+	VodRemarks string  `json:"vod_remarks"`
+}
+
+// apiClass maps a single entry in the top-level class list returned by the API.
+type apiClass struct {
+	TypeID   int    `json:"type_id"`
+	TypeName string `json:"type_name"`
 }
 
 // apiResponse maps the top-level JSON structure.
 type apiResponse struct {
 	PageCount int        `json:"pagecount"`
 	List      []apiMovie `json:"list"`
+	Class     []apiClass `json:"class"`
 }
 
 // Collector fetches all pages from apiURL and upserts movies into db.
@@ -111,6 +145,11 @@ func (c *Collector) RunWithContext(ctx context.Context) error {
 		pageCount = 1
 	}
 
+	// Pre-populate category maps from the class list returned on the first page.
+	if c.CollectionSourceID != 0 && len(first.Class) > 0 {
+		c.populateCategoryMaps(first.Class)
+	}
+
 	// Process page 1 results immediately.
 	c.processMovies(first.List)
 
@@ -156,7 +195,7 @@ func (c *Collector) RunWithContext(ctx context.Context) error {
 
 // fetchPage requests a single page from the API and decodes the response.
 func (c *Collector) fetchPage(ctx context.Context, page int) (*apiResponse, error) {
-	url := fmt.Sprintf("%s&pg=%d", c.APIURL, page)
+	url := fmt.Sprintf("%s&ac=detail&pg=%d", c.APIURL, page)
 	if c.Hours > 0 {
 		url = fmt.Sprintf("%s&h=%d", url, c.Hours)
 	}
@@ -164,6 +203,7 @@ func (c *Collector) fetchPage(ctx context.Context, page int) (*apiResponse, erro
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("Accept", "application/json")
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -182,11 +222,16 @@ func (c *Collector) fetchPage(ctx context.Context, page int) (*apiResponse, erro
 	return &ar, nil
 }
 
-// processMovies upserts each movie; parse errors are logged and skipped.
+// processMovies upserts each movie; entries without a play URL are logged and
+// skipped, and other errors are also logged and skipped.
 func (c *Collector) processMovies(list []apiMovie) {
 	for _, am := range list {
+		if am.VodPlayURL == "" {
+			log.Printf("collector: skipping vod_id=%d name=%q: vod_play_url is empty", int(am.VodID), am.VodName)
+			continue
+		}
 		if err := c.upsertMovie(am); err != nil {
-			log.Printf("collector: upsert error for vod_id=%d name=%q: %v", am.VodID, am.VodName, err)
+			log.Printf("collector: upsert error for vod_id=%d name=%q: %v", int(am.VodID), am.VodName, err)
 		}
 	}
 }
@@ -205,6 +250,33 @@ func (c *Collector) GetLocalCategoryID(sourceID uint, remoteTypeID string) uint 
 		return 0
 	}
 	return cm.LocalCategoryID
+}
+
+// populateCategoryMaps inserts or updates CategoryMap rows for the remote class
+// list returned on the first API page, filling in RemoteName for later manual
+// binding.
+func (c *Collector) populateCategoryMaps(classes []apiClass) {
+	for _, cl := range classes {
+		typeIDStr := fmt.Sprintf("%d", cl.TypeID)
+		var cm models.CategoryMap
+		err := c.DB.Where("source_id = ? AND remote_type_id = ?", c.CollectionSourceID, typeIDStr).First(&cm).Error
+		if err == gorm.ErrRecordNotFound {
+			cm = models.CategoryMap{
+				SourceID:     c.CollectionSourceID,
+				RemoteTypeID: typeIDStr,
+				RemoteName:   cl.TypeName,
+			}
+			if createErr := c.DB.Create(&cm).Error; createErr != nil {
+				log.Printf("collector: populateCategoryMaps create error: %v", createErr)
+			}
+		} else if err != nil {
+			log.Printf("collector: populateCategoryMaps lookup error: %v", err)
+		} else if cm.RemoteName == "" && cl.TypeName != "" {
+			if updateErr := c.DB.Model(&cm).Update("remote_name", cl.TypeName).Error; updateErr != nil {
+				log.Printf("collector: populateCategoryMaps update error: %v", updateErr)
+			}
+		}
+	}
 }
 
 // upsertMovie converts an apiMovie to DB records and performs an upsert.
@@ -233,7 +305,7 @@ func (c *Collector) upsertMovie(am apiMovie) error {
 	if result.Error == gorm.ErrRecordNotFound {
 		movie = models.Movie{
 			Title:        am.VodName,
-			ThirdPartyID: fmt.Sprintf("%d", am.VodID),
+			ThirdPartyID: fmt.Sprintf("%d", int(am.VodID)),
 			SubTitle:     am.VodSub,
 			Poster:       am.VodPic,
 			Description:  am.VodContent,

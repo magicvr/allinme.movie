@@ -209,8 +209,8 @@ func TestCollectorRun_SkipsMalformedMovie(t *testing.T) {
 	db := newTestDB(t)
 	srv := fakeServer(t, [][]apiMovie{
 		{
-			{VodID: 0, VodName: "", VodPlayURL: ""},           // should be skipped (empty name)
-			{VodID: 2, VodName: "Good Movie", VodPlayURL: ""}, // should be deleted (no video sources)
+			{VodID: 0, VodName: "", VodPlayURL: ""},            // skipped: empty name and empty play URL
+			{VodID: 2, VodName: "Good Movie", VodPlayURL: ""}, // skipped: empty vod_play_url
 		},
 	})
 	defer srv.Close()
@@ -317,9 +317,9 @@ func TestMultiSourceAggregation(t *testing.T) {
 	}
 }
 
-// TestMultiSourceCleanup verifies that removing a source's links only deletes
-// that source's VideoSources and only removes the Movie when it has no sources
-// left.
+// TestMultiSourceCleanup verifies that a movie returned with an empty
+// vod_play_url is skipped entirely, leaving existing VideoSource records
+// untouched (new skip-on-empty-play-url behaviour).
 func TestMultiSourceCleanup(t *testing.T) {
 	db := newTestDB(t)
 
@@ -329,7 +329,7 @@ func TestMultiSourceCleanup(t *testing.T) {
 	defer srvFull.Close()
 
 	srvEmpty := fakeServer(t, [][]apiMovie{
-		{{VodID: 1, VodName: "Cleanup Movie", VodPlayURL: ""}}, // source removed its links
+		{{VodID: 1, VodName: "Cleanup Movie", VodPlayURL: ""}}, // empty play URL → skipped
 	})
 	defer srvEmpty.Close()
 
@@ -354,7 +354,9 @@ func TestMultiSourceCleanup(t *testing.T) {
 		t.Fatalf("setup: expected 2 video sources, got %d", vsCount)
 	}
 
-	// Source A now returns the movie with no play URL (link removed).
+	// Source A now returns the movie with an empty play URL.
+	// With the new skip behaviour the entry is logged and skipped, so the
+	// existing VideoSource records must remain unchanged.
 	cA := New(srvEmpty.URL+"?", db)
 	cA.CollectionSourceID = srcA.ID
 	cA.SourceName = srcA.Name
@@ -362,32 +364,15 @@ func TestMultiSourceCleanup(t *testing.T) {
 		t.Fatalf("cleanup Run for source A: %v", err)
 	}
 
-	// Only source B's VideoSource should remain; the Movie should survive.
+	// Both VideoSources should still exist (skip = no deletion).
 	db.Model(&models.VideoSource{}).Count(&vsCount)
-	if vsCount != 1 {
-		t.Errorf("video source count = %d, want 1 (only B remains)", vsCount)
+	if vsCount != 2 {
+		t.Errorf("video source count = %d, want 2 (skip on empty vod_play_url)", vsCount)
 	}
 	var movieCount int64
 	db.Model(&models.Movie{}).Count(&movieCount)
 	if movieCount != 1 {
-		t.Errorf("movie count = %d, want 1 (B still has it)", movieCount)
-	}
-
-	// Now source B also removes its links; the Movie should be deleted.
-	cB := New(srvEmpty.URL+"?", db)
-	cB.CollectionSourceID = srcB.ID
-	cB.SourceName = srcB.Name
-	if err := cB.Run(); err != nil {
-		t.Fatalf("cleanup Run for source B: %v", err)
-	}
-
-	db.Model(&models.VideoSource{}).Count(&vsCount)
-	db.Model(&models.Movie{}).Count(&movieCount)
-	if vsCount != 0 {
-		t.Errorf("video source count = %d, want 0", vsCount)
-	}
-	if movieCount != 0 {
-		t.Errorf("movie count = %d, want 0 (orphan deleted)", movieCount)
+		t.Errorf("movie count = %d, want 1", movieCount)
 	}
 }
 
@@ -444,5 +429,142 @@ func TestRunAllFromDB(t *testing.T) {
 	db.First(&movie)
 	if movie.Title != "Enabled Movie" {
 		t.Errorf("movie title = %q, want Enabled Movie", movie.Title)
+	}
+}
+
+// TestFlexInt verifies that flexInt correctly unmarshals both JSON numbers and
+// quoted strings.
+func TestFlexInt(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  int
+	}{
+		{name: "integer", input: `42`, want: 42},
+		{name: "string", input: `"42"`, want: 42},
+		{name: "zero", input: `0`, want: 0},
+		{name: "string zero", input: `"0"`, want: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var f flexInt
+			if err := json.Unmarshal([]byte(tc.input), &f); err != nil {
+				t.Fatalf("UnmarshalJSON(%q): %v", tc.input, err)
+			}
+			if int(f) != tc.want {
+				t.Errorf("got %d, want %d", int(f), tc.want)
+			}
+		})
+	}
+}
+
+// TestFetchPage_ACDetailParam verifies that fetchPage always appends ac=detail
+// to the request URL.
+func TestFetchPage_ACDetailParam(t *testing.T) {
+	db := newTestDB(t)
+	var receivedQueries []url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedQueries = append(receivedQueries, r.URL.Query())
+		resp := apiResponse{
+			PageCount: 1,
+			List:      []apiMovie{{VodID: 1, VodName: "Detail Movie", VodPlayURL: "HD$http://example.com/hd.m3u8"}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL+"?", db)
+	if err := c.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(receivedQueries) == 0 {
+		t.Fatal("no API requests made")
+	}
+	for i, q := range receivedQueries {
+		if got := q.Get("ac"); got != "detail" {
+			t.Errorf("request %d: ac param = %q, want \"detail\"", i, got)
+		}
+	}
+}
+
+// TestFetchPage_AcceptHeader verifies that fetchPage sets Accept: application/json.
+func TestFetchPage_AcceptHeader(t *testing.T) {
+	db := newTestDB(t)
+	var receivedHeaders []http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedHeaders = append(receivedHeaders, r.Header)
+		resp := apiResponse{
+			PageCount: 1,
+			List:      []apiMovie{{VodID: 1, VodName: "Header Movie", VodPlayURL: "HD$http://example.com/hd.m3u8"}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL+"?", db)
+	if err := c.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(receivedHeaders) == 0 {
+		t.Fatal("no API requests made")
+	}
+	for i, h := range receivedHeaders {
+		if got := h.Get("Accept"); got != "application/json" {
+			t.Errorf("request %d: Accept header = %q, want \"application/json\"", i, got)
+		}
+	}
+}
+
+// TestPopulateCategoryMaps verifies that category maps are pre-populated from
+// the class list returned on the first API page.
+func TestPopulateCategoryMaps(t *testing.T) {
+	db := newTestDB(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := apiResponse{
+			PageCount: 1,
+			Class: []apiClass{
+				{TypeID: 1, TypeName: "电影"},
+				{TypeID: 2, TypeName: "电视剧"},
+			},
+			List: []apiMovie{{VodID: 1, VodName: "Class Movie", VodPlayURL: "HD$http://example.com/hd.m3u8"}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	src := models.CollectionSource{Name: "S", APIURL: srv.URL + "?", SourceKey: "s", Enabled: boolPtr(true)}
+	db.Create(&src)
+
+	c := New(srv.URL+"?", db)
+	c.CollectionSourceID = src.ID
+	if err := c.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Two CategoryMap rows should have been created with the correct RemoteNames.
+	var rows []models.CategoryMap
+	db.Where("source_id = ?", src.ID).Find(&rows)
+
+	byID := make(map[string]models.CategoryMap)
+	for _, r := range rows {
+		byID[r.RemoteTypeID] = r
+	}
+
+	if cm, ok := byID["1"]; !ok {
+		t.Error("CategoryMap for type_id=1 not found")
+	} else if cm.RemoteName != "电影" {
+		t.Errorf("RemoteName for type_id=1 = %q, want 电影", cm.RemoteName)
+	}
+
+	if cm, ok := byID["2"]; !ok {
+		t.Error("CategoryMap for type_id=2 not found")
+	} else if cm.RemoteName != "电视剧" {
+		t.Errorf("RemoteName for type_id=2 = %q, want 电视剧", cm.RemoteName)
 	}
 }
