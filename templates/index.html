@@ -26,6 +26,8 @@
         >搜索</button>
       </form>
     </div>
+    <!-- Category nav row (populated by JS) -->
+    <div id="cat-nav" class="hidden max-w-7xl mx-auto px-4 pb-2 flex flex-wrap gap-2"></div>
   </nav>
 
   <!-- Main content -->
@@ -127,6 +129,41 @@
         grid.appendChild(a);
       });
       section.classList.remove('hidden');
+    })();
+  </script>
+  <script>
+    // Load enabled categories for the nav bar.
+    (function () {
+      fetch('/api/categories')
+        .then(function (r) { return r.json(); })
+        .then(function (cats) {
+          if (!cats || !cats.length) return;
+          var nav = document.getElementById('cat-nav');
+          var params = new URLSearchParams(window.location.search);
+          var activeCatID = params.get('category_id') || '';
+
+          var allLink = document.createElement('a');
+          allLink.href = '/';
+          allLink.textContent = '全部';
+          allLink.className = 'px-3 py-1 rounded-full text-xs font-medium transition-colors ' +
+            (!activeCatID ? 'bg-red-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700');
+          nav.appendChild(allLink);
+
+          cats.forEach(function (cat) {
+            var a = document.createElement('a');
+            a.href = '/?category_id=' + cat.id;
+            a.textContent = cat.name;
+            var isActive = activeCatID === String(cat.id);
+            a.className = 'px-3 py-1 rounded-full text-xs font-medium transition-colors ' +
+              (isActive ? 'bg-red-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700');
+            nav.appendChild(a);
+          });
+          nav.classList.remove('hidden');
+        })
+        .catch(function (err) {
+          console.error('Failed to load categories:', err);
+          /* silently ignore – categories nav is optional */
+        });
     })();
   </script>
 </body>

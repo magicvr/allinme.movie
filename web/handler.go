@@ -34,8 +34,14 @@ type detailPageData struct {
 
 // Index handles GET / – shows the most recently updated movies.
 func (h *Handler) Index(w http.ResponseWriter, r *http.Request) {
+	db := h.DB.Order("update_time desc").Limit(60)
+	if catIDStr := r.URL.Query().Get("category_id"); catIDStr != "" {
+		if catID, err := strconv.ParseUint(catIDStr, 10, 64); err == nil && catID > 0 {
+			db = db.Where("category_id = ?", catID)
+		}
+	}
 	var movies []models.Movie
-	if err := h.DB.Order("update_time desc").Limit(60).Find(&movies).Error; err != nil {
+	if err := db.Find(&movies).Error; err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

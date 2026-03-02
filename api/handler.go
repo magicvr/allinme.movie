@@ -153,6 +153,28 @@ func (h *Handler) UpdateCategoryMaps(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ListAllCategoryMaps handles GET /api/admin/category-maps.
+// Returns all CategoryMap entries (both mapped and unmapped).
+func (h *Handler) ListAllCategoryMaps(w http.ResponseWriter, r *http.Request) {
+	var maps []models.CategoryMap
+	if err := h.DB.Find(&maps).Error; err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, maps)
+}
+
+// ListCategories handles GET /api/categories.
+// Returns all enabled local categories for the public nav bar.
+func (h *Handler) ListCategories(w http.ResponseWriter, r *http.Request) {
+	var cats []models.Category
+	if err := h.DB.Where("enabled = ?", true).Find(&cats).Error; err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, cats)
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
