@@ -11,12 +11,13 @@ import (
 	"sync"
 	"time"
 
+	"my-movie-site/models"
+
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"my-movie-site/models"
 )
 
-const defaultMaxWorkers = 5
+const defaultMaxWorkers = 1
 
 // apiMovie maps the JSON fields returned by the remote API.
 type apiMovie struct {
@@ -307,4 +308,3 @@ func parseVideoSources(raw string, movieID uint, collectionSourceID uint, source
 	}
 	return sources
 }
-
