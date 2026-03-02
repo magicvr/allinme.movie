@@ -43,7 +43,7 @@ func main() {
 	}
 	tmpl := template.Must(template.ParseGlob(tmplDir + "/*.html"))
 
-	h := &admin.Handler{DB: database.DB}
+	h := &admin.Handler{DB: database.DB, CollectorURL: collectorURL, Tmpl: tmpl}
 	a := &api.Handler{DB: database.DB}
 	w := &web.Handler{DB: database.DB, Tmpl: tmpl}
 
@@ -51,8 +51,10 @@ func main() {
 	mux.HandleFunc("GET /", w.Index)
 	mux.HandleFunc("GET /search", w.Search)
 	mux.HandleFunc("GET /movie/{id}", w.Detail)
+	mux.HandleFunc("GET /admin", h.AdminPage)
 	mux.HandleFunc("DELETE /admin/source/{key}", h.DeleteSource)
 	mux.HandleFunc("PUT /admin/source/replace-base", h.ReplaceBase)
+	mux.HandleFunc("POST /admin/sync", h.Sync)
 	mux.HandleFunc("GET /api/movies", a.ListMovies)
 	mux.HandleFunc("GET /api/search", a.SearchMovies)
 	mux.HandleFunc("GET /api/movie/{id}", a.GetMovie)

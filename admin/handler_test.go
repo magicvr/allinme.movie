@@ -49,6 +49,7 @@ func newMux(h *Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("DELETE /admin/source/{key}", h.DeleteSource)
 	mux.HandleFunc("PUT /admin/source/replace-base", h.ReplaceBase)
+	mux.HandleFunc("POST /admin/sync", h.Sync)
 	return mux
 }
 
@@ -226,5 +227,38 @@ func TestCleanOrphanMovies(t *testing.T) {
 	db.First(&surviving)
 	if surviving.Title != "Has Source" {
 		t.Errorf("surviving movie = %q, want %q", surviving.Title, "Has Source")
+	}
+}
+
+func TestSync_NoCollectorURLReturnsServiceUnavailable(t *testing.T) {
+	db := newTestDB(t)
+	h := &Handler{DB: db, CollectorURL: ""}
+	mux := newMux(h)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/sync", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rr.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestSync_WhileRunningReturnsConflict(t *testing.T) {
+	db := newTestDB(t)
+	h := &Handler{DB: db, CollectorURL: "http://example.com"}
+
+	// Simulate a sync already in progress.
+	h.mu.Lock()
+	h.syncing = true
+	h.mu.Unlock()
+
+	mux := newMux(h)
+	req := httptest.NewRequest(http.MethodPost, "/admin/sync", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Errorf("status = %d, want %d", rr.Code, http.StatusConflict)
 	}
 }
