@@ -4,6 +4,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"gorm.io/gorm"
@@ -23,6 +24,12 @@ type Handler struct {
 type pageData struct {
 	Query  string
 	Movies []models.Movie
+}
+
+// detailPageData is passed to the detail template.
+type detailPageData struct {
+	Movie   models.Movie
+	Sources []models.VideoSource
 }
 
 // Index handles GET / – shows the most recently updated movies.
@@ -55,13 +62,46 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) render(w http.ResponseWriter, data pageData) {
-	// Buffer the template output so we can still send a 500 if execution fails.
+	h.renderTemplate(w, "index.html", data)
+}
+
+func (h *Handler) renderTemplate(w http.ResponseWriter, name string, data any) {
 	var buf strings.Builder
-	if err := h.Tmpl.Execute(&buf, data); err != nil {
+	if err := h.Tmpl.ExecuteTemplate(&buf, name, data); err != nil {
 		log.Printf("template execute error: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(buf.String()))
+}
+
+// Detail handles GET /movie/{id} – shows movie metadata and multi-source player.
+func (h *Handler) Detail(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil || id == 0 {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	var movie models.Movie
+	if err := h.DB.First(&movie, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("db error fetching movie %d: %v", id, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var sources []models.VideoSource
+	if err := h.DB.Where("movie_id = ?", id).Find(&sources).Error; err != nil {
+		log.Printf("db error fetching sources for movie %d: %v", id, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	h.renderTemplate(w, "detail.html", detailPageData{Movie: movie, Sources: sources})
 }

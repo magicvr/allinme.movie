@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{.Movie.Title}} - AllInMe Movie</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/artplayer/dist/artplayer.css" />
+</head>
+<body class="bg-gray-950 text-white min-h-screen">
+
+  <!-- Navbar -->
+  <nav class="bg-gray-900 shadow-md sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
+      <a href="/" class="text-red-500 font-bold text-xl tracking-wide shrink-0">AllInMe Movie</a>
+      <form method="GET" action="/search" class="flex flex-1 max-w-xl">
+        <input
+          type="search"
+          name="q"
+          placeholder="搜索影片…"
+          class="flex-1 rounded-l-full bg-gray-800 border border-gray-700 px-4 py-2 text-sm focus:outline-none focus:border-red-500"
+        />
+        <button
+          type="submit"
+          class="rounded-r-full bg-red-600 hover:bg-red-700 px-5 py-2 text-sm font-semibold transition-colors"
+        >搜索</button>
+      </form>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="max-w-7xl mx-auto px-4 py-8">
+
+    <!-- Metadata row -->
+    <div class="flex flex-col lg:flex-row gap-8">
+
+      <!-- Poster -->
+      <div class="shrink-0 w-full lg:w-56">
+        {{if .Movie.Poster}}
+        <img
+          src="{{.Movie.Poster}}"
+          alt="{{.Movie.Title}}"
+          class="w-full rounded-lg shadow-lg"
+        />
+        {{else}}
+        <div class="w-full aspect-[2/3] bg-gray-700 rounded-lg flex items-center justify-center">
+          <svg class="w-16 h-16 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+              d="M7 4v16M17 4v16M3 8h18M3 16h18" />
+          </svg>
+        </div>
+        {{end}}
+      </div>
+
+      <!-- Info -->
+      <div class="flex-1">
+        <h1 class="text-2xl font-bold mb-2">{{.Movie.Title}}</h1>
+        <div class="flex flex-wrap gap-3 text-sm text-gray-400 mb-4">
+          {{if .Movie.Year}}<span>{{.Movie.Year}}</span>{{end}}
+          {{if .Movie.Area}}<span>{{.Movie.Area}}</span>{{end}}
+          {{if .Movie.Class}}<span>{{.Movie.Class}}</span>{{end}}
+        </div>
+        {{if .Movie.Description}}
+        <p class="text-gray-300 text-sm leading-relaxed">{{.Movie.Description}}</p>
+        {{end}}
+      </div>
+    </div>
+
+    <!-- Player & Sources -->
+    {{if .Sources}}
+    <div class="mt-8">
+
+      <!-- Source selector buttons -->
+      <div class="flex flex-wrap gap-2 mb-4" id="source-btns">
+        {{range .Sources}}
+        <button
+          data-url="{{.RawURL}}"
+          class="source-btn px-4 py-1.5 rounded-full text-sm font-medium bg-gray-700 hover:bg-red-600 transition-colors"
+        >{{.SourceKey}}</button>
+        {{end}}
+      </div>
+
+      <!-- ArtPlayer container -->
+      <div id="artplayer" class="w-full rounded-lg overflow-hidden" style="height:500px;"></div>
+    </div>
+    {{end}}
+
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
+  <script src="https://unpkg.com/artplayer/dist/artplayer.js"></script>
+  <script>
+    (function () {
+      var btns = document.querySelectorAll('.source-btn');
+      if (!btns.length) return;
+
+      var art = null;
+
+      function loadSource(url) {
+        if (art) {
+          art.destroy(false);
+          art = null;
+        }
+        art = new Artplayer({
+          container: '#artplayer',
+          url: url,
+          type: 'm3u8',
+          autoplay: true,
+          customType: {
+            m3u8: function (video, url) {
+              if (Hls.isSupported()) {
+                var hls = new Hls();
+                hls.loadSource(url);
+                hls.attachMedia(video);
+              } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = url;
+              }
+            },
+          },
+        });
+      }
+
+      btns.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          btns.forEach(function (b) {
+            b.classList.remove('bg-red-600');
+            b.classList.add('bg-gray-700');
+          });
+          btn.classList.remove('bg-gray-700');
+          btn.classList.add('bg-red-600');
+          loadSource(btn.dataset.url);
+        });
+      });
+
+      // Auto-load the first source
+      btns[0].click();
+    })();
+  </script>
+</body>
+</html>
