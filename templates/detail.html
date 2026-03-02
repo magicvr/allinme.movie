@@ -91,12 +91,55 @@
   <script src="https://unpkg.com/artplayer/dist/artplayer.js"></script>
   <script>
     (function () {
+      var HISTORY_KEY = 'allinme_watch_history';
+      var PROGRESS_KEY = 'allinme_progress';
+      var HISTORY_MAX = 20;
+
+      var movieId    = '{{.Movie.ID}}';
+      var movieTitle = {{.Movie.Title | js}};
+      var moviePoster = {{.Movie.Poster | js}};
+
+      // --- Watch history helpers ---
+      function saveHistory(sourceKey) {
+        var raw = localStorage.getItem(HISTORY_KEY);
+        var list;
+        try { list = raw ? JSON.parse(raw) : []; } catch (e) { list = []; }
+        // Remove existing entry for this movie
+        list = list.filter(function (item) { return item.id !== movieId; });
+        list.unshift({
+          id: movieId,
+          title: movieTitle,
+          poster: moviePoster,
+          sourceKey: sourceKey,
+          timestamp: Date.now()
+        });
+        if (list.length > HISTORY_MAX) list = list.slice(0, HISTORY_MAX);
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+      }
+
+      // --- Playback progress helpers ---
+      function saveProgress(seconds) {
+        var raw = localStorage.getItem(PROGRESS_KEY);
+        var map;
+        try { map = raw ? JSON.parse(raw) : {}; } catch (e) { map = {}; }
+        map[movieId] = seconds;
+        localStorage.setItem(PROGRESS_KEY, JSON.stringify(map));
+      }
+
+      function getProgress() {
+        var raw = localStorage.getItem(PROGRESS_KEY);
+        if (!raw) return 0;
+        try { var map = JSON.parse(raw); return map[movieId] || 0; } catch (e) { return 0; }
+      }
+
+      // --- Player ---
       var btns = document.querySelectorAll('.source-btn');
       if (!btns.length) return;
 
       var art = null;
+      var _lastSaved = 0;
 
-      function loadSource(url) {
+      function loadSource(url, sourceKey, seek) {
         if (art) {
           art.destroy(false);
           art = null;
@@ -118,6 +161,35 @@
             },
           },
         });
+
+        art.on('ready', function () {
+          // Seek to saved progress if applicable
+          if (seek && seek > 5) {
+            if (confirm('上次看到 ' + formatTime(seek) + '，是否继续播放？')) {
+              art.seek = seek;
+            }
+          }
+          // Save progress every 5 seconds
+          art.on('timeupdate', function () {
+            var t = Math.floor(art.currentTime);
+            if (t > 5 && t - _lastSaved >= 5) {
+              _lastSaved = t;
+              saveProgress(t);
+            }
+          });
+          // Clear progress when video ends
+          art.on('video:ended', function () {
+            saveProgress(0);
+          });
+        });
+
+        saveHistory(sourceKey);
+      }
+
+      function formatTime(seconds) {
+        var m = Math.floor(seconds / 60);
+        var s = Math.floor(seconds % 60);
+        return m + '分' + (s < 10 ? '0' : '') + s + '秒';
       }
 
       btns.forEach(function (btn) {
@@ -128,12 +200,21 @@
           });
           btn.classList.remove('bg-gray-700');
           btn.classList.add('bg-red-600');
-          loadSource(btn.dataset.url);
+          loadSource(btn.dataset.url, btn.textContent.trim(), 0);
         });
       });
 
-      // Auto-load the first source
-      btns[0].click();
+      // Auto-load the first source, prompting resume if progress exists
+      (function () {
+        var firstBtn = btns[0];
+        btns.forEach(function (b) {
+          b.classList.remove('bg-red-600');
+          b.classList.add('bg-gray-700');
+        });
+        firstBtn.classList.remove('bg-gray-700');
+        firstBtn.classList.add('bg-red-600');
+        loadSource(firstBtn.dataset.url, firstBtn.textContent.trim(), getProgress());
+      })();
     })();
   </script>
 </body>

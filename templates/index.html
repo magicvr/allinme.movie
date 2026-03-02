@@ -31,6 +31,12 @@
   <!-- Main content -->
   <main class="max-w-7xl mx-auto px-4 py-8">
 
+    <!-- Recently watched (rendered by JS from localStorage) -->
+    <section id="watch-history-section" class="hidden mb-10">
+      <h2 class="text-xl font-semibold mb-4 text-gray-200">最近看过</h2>
+      <div id="watch-history-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4"></div>
+    </section>
+
     {{if .Query}}
     <h2 class="text-xl font-semibold mb-6 text-gray-200">
       搜索结果：<span class="text-white">{{.Query}}</span>
@@ -77,5 +83,51 @@
     {{end}}
 
   </main>
+  <script>
+    (function () {
+      var HISTORY_KEY = 'allinme_watch_history';
+      var raw = localStorage.getItem(HISTORY_KEY);
+      if (!raw) return;
+      var list;
+      try { list = JSON.parse(raw); } catch (e) { return; }
+      if (!list || !list.length) return;
+
+      var section = document.getElementById('watch-history-section');
+      var grid = document.getElementById('watch-history-grid');
+      list.forEach(function (item) {
+        var a = document.createElement('a');
+        a.href = '/movie/' + item.id;
+        a.className = 'group block rounded-lg overflow-hidden bg-gray-800 hover:ring-2 hover:ring-red-500 transition-all duration-200';
+        if (item.poster) {
+          var img = document.createElement('img');
+          img.src = item.poster;
+          img.alt = item.title;
+          img.loading = 'lazy';
+          img.className = 'w-full aspect-[2/3] object-cover group-hover:scale-105 transition-transform duration-300';
+          a.appendChild(img);
+        } else {
+          var placeholder = document.createElement('div');
+          placeholder.className = 'w-full aspect-[2/3] bg-gray-700 flex items-center justify-center';
+          placeholder.innerHTML = '<svg class="w-12 h-12 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 4v16M17 4v16M3 8h18M3 16h18"/></svg>';
+          a.appendChild(placeholder);
+        }
+        var info = document.createElement('div');
+        info.className = 'p-2';
+        var title = document.createElement('p');
+        title.className = 'text-sm font-medium truncate leading-snug';
+        title.textContent = item.title;
+        info.appendChild(title);
+        if (item.sourceKey) {
+          var sub = document.createElement('p');
+          sub.className = 'text-xs text-gray-400 mt-0.5 truncate';
+          sub.textContent = item.sourceKey;
+          info.appendChild(sub);
+        }
+        a.appendChild(info);
+        grid.appendChild(a);
+      });
+      section.classList.remove('hidden');
+    })();
+  </script>
 </body>
 </html>
