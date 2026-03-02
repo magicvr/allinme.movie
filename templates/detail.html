@@ -37,11 +37,13 @@
       <!-- Poster -->
       <div class="shrink-0 w-full lg:w-56">
         {{if .Movie.Poster}}
-        <img
-          src="{{.Movie.Poster}}"
-          alt="{{.Movie.Title}}"
-          class="w-full rounded-lg shadow-lg"
-        />
+        <div class="w-full bg-gray-800 rounded-lg shadow-lg overflow-hidden flex items-center justify-center">
+          <img
+            src="{{.Movie.Poster}}"
+            alt="{{.Movie.Title}}"
+            class="max-w-full max-h-[60vh] w-auto h-auto object-contain"
+          />
+        </div>
         {{else}}
         <div class="w-full aspect-[2/3] bg-gray-700 rounded-lg flex items-center justify-center">
           <svg class="w-16 h-16 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -96,8 +98,8 @@
       var HISTORY_MAX = 20;
 
       var movieId    = '{{.Movie.ID}}';
-      var movieTitle = {{.Movie.Title | js}};
-      var moviePoster = {{.Movie.Poster | js}};
+      var movieTitle = '{{.Movie.Title | js}}';
+      var moviePoster = '{{.Movie.Poster | js}}';
 
       // --- Watch history helpers ---
       function saveHistory(sourceKey) {

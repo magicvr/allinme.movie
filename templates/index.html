@@ -54,7 +54,10 @@
 
     <!-- Recently watched (rendered by JS from localStorage) -->
     <section id="watch-history-section" class="hidden mb-10">
-      <h2 class="text-xl font-semibold mb-4 text-gray-200">最近看过</h2>
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-semibold text-gray-200">最近看过</h2>
+        <button id="clear-history-btn" class="ml-4 px-3 py-1 text-sm rounded-full bg-gray-700 text-gray-300 hover:bg-red-600 transition-colors">清空</button>
+      </div>
       <div id="watch-history-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4"></div>
     </section>
 
@@ -88,14 +91,16 @@
       {{range .Movies}}
       <a href="/movie/{{.ID}}" class="group block rounded-lg overflow-hidden bg-gray-800 hover:ring-2 hover:ring-red-500 transition-all duration-200">
         {{if .Poster}}
-        <img
-          src="{{.Poster}}"
-          alt="{{.Title}}"
-          loading="lazy"
-          class="w-full aspect-[2/3] object-cover group-hover:scale-105 transition-transform duration-300"
-        />
+        <div class="w-full aspect-[2/3] bg-gray-800 flex items-center justify-center overflow-hidden">
+          <img
+            src="{{.Poster}}"
+            alt="{{.Title}}"
+            loading="lazy"
+            class="max-h-full w-auto object-contain group-hover:scale-105 transition-transform duration-300"
+          />
+        </div>
         {{else}}
-        <div class="w-full aspect-[2/3] bg-gray-700 flex items-center justify-center">
+        <div class="w-full aspect-[2/3] bg-gray-700 flex items-center justify-center overflow-hidden">
           <svg class="w-12 h-12 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
               d="M7 4v16M17 4v16M3 8h18M3 16h18" />
@@ -135,16 +140,19 @@
         var a = document.createElement('a');
         a.href = '/movie/' + item.id;
         a.className = 'group block rounded-lg overflow-hidden bg-gray-800 hover:ring-2 hover:ring-red-500 transition-all duration-200';
-        if (item.poster) {
+          if (item.poster) {
+          var container = document.createElement('div');
+          container.className = 'w-full aspect-[2/3] bg-gray-800 flex items-center justify-center overflow-hidden';
           var img = document.createElement('img');
           img.src = item.poster;
           img.alt = item.title;
           img.loading = 'lazy';
-          img.className = 'w-full aspect-[2/3] object-cover group-hover:scale-105 transition-transform duration-300';
-          a.appendChild(img);
+          img.className = 'max-h-full w-auto object-contain group-hover:scale-105 transition-transform duration-300';
+          container.appendChild(img);
+          a.appendChild(container);
         } else {
           var placeholder = document.createElement('div');
-          placeholder.className = 'w-full aspect-[2/3] bg-gray-700 flex items-center justify-center';
+          placeholder.className = 'w-full aspect-[2/3] bg-gray-700 flex items-center justify-center overflow-hidden';
           placeholder.innerHTML = '<svg class="w-12 h-12 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 4v16M17 4v16M3 8h18M3 16h18"/></svg>';
           a.appendChild(placeholder);
         }
@@ -164,6 +172,15 @@
         grid.appendChild(a);
       });
       section.classList.remove('hidden');
+      var clearBtn = document.getElementById('clear-history-btn');
+      if (clearBtn) {
+        clearBtn.addEventListener('click', function () {
+          if (!confirm('确定要清空最近观看记录吗？')) return;
+          localStorage.removeItem(HISTORY_KEY);
+          grid.innerHTML = '';
+          section.classList.add('hidden');
+        });
+      }
     })();
   </script>
 </body>
