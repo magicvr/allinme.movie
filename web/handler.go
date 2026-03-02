@@ -86,7 +86,7 @@ func (h *Handler) Detail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var movie models.Movie
-	if err := h.DB.First(&movie, id).Error; err != nil {
+	if err := h.DB.Preload("VideoSources").First(&movie, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -96,12 +96,5 @@ func (h *Handler) Detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var sources []models.VideoSource
-	if err := h.DB.Where("movie_id = ?", id).Find(&sources).Error; err != nil {
-		log.Printf("db error fetching sources for movie %d: %v", id, err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	h.renderTemplate(w, "detail.html", detailPageData{Movie: movie, Sources: sources})
+	h.renderTemplate(w, "detail.html", detailPageData{Movie: movie, Sources: movie.VideoSources})
 }
