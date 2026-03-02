@@ -56,6 +56,11 @@ func (s *Scheduler) Stop() {
 
 // runIncremental is the function executed on each cron tick.
 func (s *Scheduler) runIncremental() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("scheduler: recovered from panic: %v", r)
+		}
+	}()
 	start := time.Now()
 	log.Printf("scheduler: incremental collection started at %s", start.Format(time.RFC3339))
 

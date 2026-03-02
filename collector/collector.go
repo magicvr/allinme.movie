@@ -134,6 +134,11 @@ func (c *Collector) RunWithContext(ctx context.Context) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("collector: worker recovered from panic: %v", r)
+				}
+			}()
 			for pg := range jobs {
 				resp, err := c.fetchPage(ctx, pg)
 				if err != nil {

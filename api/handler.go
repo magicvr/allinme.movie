@@ -23,10 +23,9 @@ type moviesResponse struct {
 	Items []models.Movie `json:"items"`
 }
 
-// movieDetail embeds Movie and adds VideoSources.
+// movieDetail embeds Movie for the detail endpoint response.
 type movieDetail struct {
 	models.Movie
-	VideoSources []models.VideoSource `json:"video_sources"`
 }
 
 // categoryMapUpdate is used in the bulk-update request body.
@@ -62,14 +61,14 @@ func (h *Handler) ListMovies(w http.ResponseWriter, r *http.Request) {
 
 	var total int64
 	if err := db.Count(&total).Error; err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	var movies []models.Movie
 	offset := (page - 1) * size
 	if err := db.Offset(offset).Limit(size).Find(&movies).Error; err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -86,7 +85,7 @@ func (h *Handler) ListMovies(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) SearchMovies(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	if q == "" {
-		http.Error(w, "q is required", http.StatusBadRequest)
+		writeJSONError(w, "q is required", http.StatusBadRequest)
 		return
 	}
 
@@ -94,7 +93,7 @@ func (h *Handler) SearchMovies(w http.ResponseWriter, r *http.Request) {
 
 	var movies []models.Movie
 	if err := h.DB.Where("title LIKE ? ESCAPE '\\'", "%"+escaped+"%").Find(&movies).Error; err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -107,27 +106,21 @@ func (h *Handler) GetMovie(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil || id == 0 {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		writeJSONError(w, "invalid id", http.StatusBadRequest)
 		return
 	}
 
 	var movie models.Movie
-	if err := h.DB.First(&movie, id).Error; err != nil {
+	if err := h.DB.Preload("VideoSources").First(&movie, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeJSONError(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	var sources []models.VideoSource
-	if err := h.DB.Where("movie_id = ?", id).Find(&sources).Error; err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	writeJSON(w, movieDetail{Movie: movie, VideoSources: sources})
+	writeJSON(w, movieDetail{Movie: movie})
 }
 
 // ListUnmappedCategories handles GET /api/admin/category-maps/unmapped.
@@ -135,7 +128,7 @@ func (h *Handler) GetMovie(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListUnmappedCategories(w http.ResponseWriter, r *http.Request) {
 	var maps []models.CategoryMap
 	if err := h.DB.Where("local_category_id = 0").Find(&maps).Error; err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, maps)
@@ -146,14 +139,14 @@ func (h *Handler) ListUnmappedCategories(w http.ResponseWriter, r *http.Request)
 func (h *Handler) UpdateCategoryMaps(w http.ResponseWriter, r *http.Request) {
 	var updates []categoryMapUpdate
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	for _, u := range updates {
 		if err := h.DB.Model(&models.CategoryMap{}).
 			Where("id = ?", u.ID).
 			Update("local_category_id", u.LocalCategoryID).Error; err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
@@ -165,6 +158,12 @@ func writeJSON(w http.ResponseWriter, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func writeJSONError(w http.ResponseWriter, message string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 func parseIntDefault(s string, def int) int {

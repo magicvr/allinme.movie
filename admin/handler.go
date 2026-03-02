@@ -112,6 +112,11 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			h.syncing = false
 			h.mu.Unlock()
 		}()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("admin: sync recovered from panic: %v", r)
+			}
+		}()
 
 		if dbSourceCount > 0 {
 			if err := collector.RunAllFromDB(r.Context(), h.DB); err != nil {
