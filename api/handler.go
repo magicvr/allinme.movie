@@ -165,10 +165,13 @@ func (h *Handler) ListAllCategoryMaps(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListCategories handles GET /api/categories.
-// Returns all enabled local categories for the public nav bar.
+// Returns all enabled top-level local categories with their enabled children
+// pre-loaded, forming a two-level tree for the public nav bar.
 func (h *Handler) ListCategories(w http.ResponseWriter, r *http.Request) {
 	var cats []models.Category
-	if err := h.DB.Where("enabled = ?", true).Find(&cats).Error; err != nil {
+	if err := h.DB.Where("enabled = ? AND parent_id = 0", true).
+		Preload("Children", "enabled = ?", true).
+		Find(&cats).Error; err != nil {
 		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

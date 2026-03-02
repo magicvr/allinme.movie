@@ -284,6 +284,8 @@ func (c *Collector) GetLocalCategoryID(sourceID uint, remoteTypeID string, remot
 // list returned on the first API page, filling in RemoteName for later manual
 // binding.  Child categories (TypePID != 0) are stored with the display name
 // "ParentName > ChildName" for easy identification in the admin back-end.
+// It also auto-creates local Category records for both parent and child classes
+// and wires CategoryMap.LocalCategoryID to the finest-grained local category.
 func (c *Collector) populateCategoryMaps(classes []apiClass) {
 	// Build a lookup map from TypeID → TypeName for parent resolution.
 	nameByID := make(map[int]string, len(classes))
@@ -291,34 +293,102 @@ func (c *Collector) populateCategoryMaps(classes []apiClass) {
 		nameByID[cl.TypeID] = cl.TypeName
 	}
 
+	// Pass 1: ensure a local Category exists for every top-level (parent) class
+	// and update the corresponding CategoryMap entry.
+	localParentCatByRemoteID := make(map[int]uint, len(classes))
 	for _, cl := range classes {
+		if cl.TypePID != 0 {
+			continue
+		}
 		typeIDStr := fmt.Sprintf("%d", cl.TypeID)
 
-		// Compose the display name: "ParentName > ChildName" when a parent exists.
+		// Find or create the local top-level Category.
+		var cat models.Category
+		err := c.DB.Where("name = ? AND parent_id = 0", cl.TypeName).First(&cat).Error
+		if err == gorm.ErrRecordNotFound {
+			cat = models.Category{Name: cl.TypeName, ParentID: 0, Enabled: true}
+			if createErr := c.DB.Create(&cat).Error; createErr != nil {
+				log.Printf("collector: populateCategoryMaps create parent category %q: %v", cl.TypeName, createErr)
+			}
+		} else if err != nil {
+			log.Printf("collector: populateCategoryMaps find parent category %q: %v", cl.TypeName, err)
+		}
+		if cat.ID != 0 {
+			localParentCatByRemoteID[cl.TypeID] = cat.ID
+		}
+
+		// Upsert the CategoryMap row for this parent class.
+		c.upsertCategoryMap(typeIDStr, cl.TypeName, cat.ID)
+	}
+
+	// Pass 2: ensure a local Category exists for every child class and update
+	// the corresponding CategoryMap entry to point to the child Category.
+	for _, cl := range classes {
+		if cl.TypePID == 0 {
+			continue
+		}
+		typeIDStr := fmt.Sprintf("%d", cl.TypeID)
+		parentName := nameByID[cl.TypePID]
 		displayName := cl.TypeName
-		if cl.TypePID != 0 {
-			if parentName, ok := nameByID[cl.TypePID]; ok && parentName != "" {
-				displayName = parentName + " > " + cl.TypeName
+		if parentName != "" {
+			displayName = parentName + " > " + cl.TypeName
+		}
+
+		parentLocalID := localParentCatByRemoteID[cl.TypePID]
+
+		// Find or create the local child Category.
+		var cat models.Category
+		if parentLocalID != 0 {
+			err := c.DB.Where("name = ? AND parent_id = ?", cl.TypeName, parentLocalID).First(&cat).Error
+			if err == gorm.ErrRecordNotFound {
+				cat = models.Category{Name: cl.TypeName, ParentID: parentLocalID, Enabled: true}
+				if createErr := c.DB.Create(&cat).Error; createErr != nil {
+					log.Printf("collector: populateCategoryMaps create child category %q: %v", cl.TypeName, createErr)
+				}
+			} else if err != nil {
+				log.Printf("collector: populateCategoryMaps find child category %q: %v", cl.TypeName, err)
 			}
 		}
 
-		var cm models.CategoryMap
-		err := c.DB.Where("source_id = ? AND remote_type_id = ?", c.CollectionSourceID, typeIDStr).First(&cm).Error
-		if err == gorm.ErrRecordNotFound {
-			cm = models.CategoryMap{
-				SourceID:     c.CollectionSourceID,
-				RemoteTypeID: typeIDStr,
-				RemoteName:   displayName,
-			}
-			if createErr := c.DB.Create(&cm).Error; createErr != nil {
-				log.Printf("collector: populateCategoryMaps create error: %v", createErr)
-			}
-		} else if err != nil {
-			log.Printf("collector: populateCategoryMaps lookup error: %v", err)
-		} else if cm.RemoteName == "" && displayName != "" {
-			if updateErr := c.DB.Model(&cm).Update("remote_name", displayName).Error; updateErr != nil {
-				log.Printf("collector: populateCategoryMaps update error: %v", updateErr)
-			}
+		// Upsert the CategoryMap row for this child class, pointing to the child
+		// local Category (finest granularity).
+		c.upsertCategoryMap(typeIDStr, displayName, cat.ID)
+	}
+}
+
+// upsertCategoryMap inserts or selectively updates a CategoryMap row.
+// If the row does not exist it is created with the given remoteName and
+// localCategoryID.  If it already exists, only blank remoteName / zero
+// localCategoryID fields are backfilled.
+func (c *Collector) upsertCategoryMap(remoteTypeID, remoteName string, localCategoryID uint) {
+	var cm models.CategoryMap
+	err := c.DB.Where("source_id = ? AND remote_type_id = ?", c.CollectionSourceID, remoteTypeID).First(&cm).Error
+	if err == gorm.ErrRecordNotFound {
+		cm = models.CategoryMap{
+			SourceID:        c.CollectionSourceID,
+			RemoteTypeID:    remoteTypeID,
+			RemoteName:      remoteName,
+			LocalCategoryID: localCategoryID,
+		}
+		if createErr := c.DB.Create(&cm).Error; createErr != nil {
+			log.Printf("collector: upsertCategoryMap create error: %v", createErr)
+		}
+		return
+	}
+	if err != nil {
+		log.Printf("collector: upsertCategoryMap lookup error: %v", err)
+		return
+	}
+	updates := map[string]interface{}{}
+	if cm.RemoteName == "" && remoteName != "" {
+		updates["remote_name"] = remoteName
+	}
+	if cm.LocalCategoryID == 0 && localCategoryID != 0 {
+		updates["local_category_id"] = localCategoryID
+	}
+	if len(updates) > 0 {
+		if updateErr := c.DB.Model(&cm).Updates(updates).Error; updateErr != nil {
+			log.Printf("collector: upsertCategoryMap update error: %v", updateErr)
 		}
 	}
 }
