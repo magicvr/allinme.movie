@@ -6,9 +6,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"my-movie-site/models"
+
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
-	"my-movie-site/models"
 )
 
 var DB *gorm.DB
@@ -50,10 +51,7 @@ func SeedDefaultCategories(db *gorm.DB) {
 	if count > 0 {
 		return
 	}
-	defaults := []string{"电影", "电视剧", "综艺", "动漫", "短剧"}
-	for _, name := range defaults {
-		if err := db.Create(&models.Category{Name: name, Enabled: true}).Error; err != nil {
-			log.Printf("database: seed category %q: %v", name, err)
-		}
-	}
+	// Initial seeding of built-in categories removed.
+	// Categories are now populated from the collector's base API class list.
+	log.Print("database: category table empty — skipping default seed (collector will populate categories)")
 }

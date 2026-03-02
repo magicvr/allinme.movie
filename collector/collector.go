@@ -158,10 +158,11 @@ func (c *Collector) RunWithContext(ctx context.Context) error {
 	}
 
 	// Sync categories from the full class list (base URL, no ac=detail).
-	if c.CollectionSourceID != 0 {
-		if err := c.SyncClasses(ctx); err != nil {
-			log.Printf("collector: SyncClasses error: %v", err)
-		}
+	// Always attempt to sync classes so manual/legacy runs also populate
+	// the local Category table from the base API. The operation is
+	// idempotent.
+	if err := c.SyncClasses(ctx); err != nil {
+		log.Printf("collector: SyncClasses error: %v", err)
 	}
 
 	// Process page 1 results immediately.
@@ -247,9 +248,6 @@ func (c *Collector) fetchClasses(ctx context.Context) ([]apiClass, error) {
 // called before processing movies so that every remote type_id has a
 // corresponding local Category and CategoryMap entry.
 func (c *Collector) SyncClasses(ctx context.Context) error {
-	if c.CollectionSourceID == 0 {
-		return nil
-	}
 	classes, err := c.fetchClasses(ctx)
 	if err != nil {
 		return fmt.Errorf("collector: SyncClasses fetch: %w", err)
@@ -315,24 +313,25 @@ func (c *Collector) processMovies(list []apiMovie) {
 // LocalCategoryID = 0 (to-be-bound) and returns 0.  remoteName is stored on
 // the placeholder row so admins can identify it in the back-end.
 func (c *Collector) GetLocalCategoryID(sourceID uint, remoteTypeID string, remoteName string) uint {
-	if sourceID == 0 || remoteTypeID == "" {
+	if remoteTypeID == "" {
 		return 0
 	}
-	var cm models.CategoryMap
-	result := c.DB.
-		Attrs(models.CategoryMap{RemoteName: remoteName}).
-		FirstOrCreate(&cm, models.CategoryMap{SourceID: sourceID, RemoteTypeID: remoteTypeID})
-	if result.Error != nil {
-		log.Printf("collector: GetLocalCategoryID error: %v", result.Error)
+	// Directly look up a Category by RemoteID. This removes the CategoryMap
+	// indirection: categories are created/updated by SyncClasses and carry
+	// their remote type id in the RemoteID column.
+	rid, err := strconv.Atoi(remoteTypeID)
+	if err != nil {
 		return 0
 	}
-	// Update RemoteName if the existing row has no name yet.
-	if cm.RemoteName == "" && remoteName != "" {
-		if err := c.DB.Model(&cm).Update("remote_name", remoteName).Error; err != nil {
-			log.Printf("collector: GetLocalCategoryID update name error: %v", err)
+	var cat models.Category
+	if err := c.DB.Where("remote_id = ?", rid).First(&cat).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return 0
 		}
+		log.Printf("collector: GetLocalCategoryID lookup error: %v", err)
+		return 0
 	}
-	return cm.LocalCategoryID
+	return cat.ID
 }
 
 // populateCategoryMaps inserts or updates CategoryMap rows for the remote class
@@ -357,7 +356,7 @@ func (c *Collector) populateCategoryMaps(classes []apiClass) {
 		if cl.TypePID != 0 {
 			continue
 		}
-		typeIDStr := fmt.Sprintf("%d", cl.TypeID)
+		// typeIDStr no longer used; mapping uses Category.RemoteID
 
 		// Find or create the local top-level Category.
 		var cat models.Category
@@ -381,8 +380,9 @@ func (c *Collector) populateCategoryMaps(classes []apiClass) {
 			localParentCatByRemoteID[cl.TypeID] = cat.ID
 		}
 
-		// Upsert the CategoryMap row for this parent class.
-		c.upsertCategoryMap(typeIDStr, cl.TypeName, cat.ID, 0)
+		// Parent category ensured; RemoteID stored on Category. CategoryMap
+		// rows are no longer created—the system maps movies directly by
+		// Category.RemoteID.
 	}
 
 	// Pass 2: ensure a local Category exists for every child class and update
@@ -391,12 +391,8 @@ func (c *Collector) populateCategoryMaps(classes []apiClass) {
 		if cl.TypePID == 0 {
 			continue
 		}
-		typeIDStr := fmt.Sprintf("%d", cl.TypeID)
-		parentName := nameByID[cl.TypePID]
-		displayName := cl.TypeName
-		if parentName != "" {
-			displayName = parentName + " > " + cl.TypeName
-		}
+		// typeIDStr/parentName/displayName no longer used; categories are
+		// created directly and RemoteID stored on Category.
 
 		parentLocalID := localParentCatByRemoteID[cl.TypePID]
 
@@ -421,9 +417,8 @@ func (c *Collector) populateCategoryMaps(classes []apiClass) {
 			}
 		}
 
-		// Upsert the CategoryMap row for this child class, pointing to the child
-		// local Category (finest granularity), recording the remote parent type.
-		c.upsertCategoryMap(typeIDStr, displayName, cat.ID, cl.TypePID)
+		// Child category ensured; RemoteID stored on Category. No CategoryMap
+		// upsert is performed.
 	}
 }
 
@@ -431,42 +426,7 @@ func (c *Collector) populateCategoryMaps(classes []apiClass) {
 // If the row does not exist it is created with the given remoteName,
 // localCategoryID and remoteTypePID.  If it already exists, only blank
 // remoteName / zero localCategoryID / zero remoteTypePID fields are backfilled.
-func (c *Collector) upsertCategoryMap(remoteTypeID, remoteName string, localCategoryID uint, remoteTypePID int) {
-	var cm models.CategoryMap
-	err := c.DB.Where("source_id = ? AND remote_type_id = ?", c.CollectionSourceID, remoteTypeID).First(&cm).Error
-	if err == gorm.ErrRecordNotFound {
-		cm = models.CategoryMap{
-			SourceID:        c.CollectionSourceID,
-			RemoteTypeID:    remoteTypeID,
-			RemoteName:      remoteName,
-			RemoteTypePID:   remoteTypePID,
-			LocalCategoryID: localCategoryID,
-		}
-		if createErr := c.DB.Create(&cm).Error; createErr != nil {
-			log.Printf("collector: upsertCategoryMap create error: %v", createErr)
-		}
-		return
-	}
-	if err != nil {
-		log.Printf("collector: upsertCategoryMap lookup error: %v", err)
-		return
-	}
-	updates := map[string]interface{}{}
-	if cm.RemoteName == "" && remoteName != "" {
-		updates["remote_name"] = remoteName
-	}
-	if cm.LocalCategoryID == 0 && localCategoryID != 0 {
-		updates["local_category_id"] = localCategoryID
-	}
-	if cm.RemoteTypePID == 0 && remoteTypePID != 0 {
-		updates["remote_type_pid"] = remoteTypePID
-	}
-	if len(updates) > 0 {
-		if updateErr := c.DB.Model(&cm).Updates(updates).Error; updateErr != nil {
-			log.Printf("collector: upsertCategoryMap update error: %v", updateErr)
-		}
-	}
-}
+// CategoryMap usage removed: mapping is driven by Category.RemoteID.
 
 // upsertMovie converts an apiMovie to DB records and performs an upsert.
 // Movies are matched by Title to enable cross-source aggregation.

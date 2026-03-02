@@ -9,9 +9,10 @@ import (
 	"net/url"
 	"testing"
 
+	"my-movie-site/models"
+
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
-	"my-movie-site/models"
 )
 
 // boolPtr returns a pointer to the given bool value.
@@ -209,7 +210,7 @@ func TestCollectorRun_SkipsMalformedMovie(t *testing.T) {
 	db := newTestDB(t)
 	srv := fakeServer(t, [][]apiMovie{
 		{
-			{VodID: 0, VodName: "", VodPlayURL: ""},            // skipped: empty name and empty play URL
+			{VodID: 0, VodName: "", VodPlayURL: ""},           // skipped: empty name and empty play URL
 			{VodID: 2, VodName: "Good Movie", VodPlayURL: ""}, // skipped: empty vod_play_url
 		},
 	})
@@ -249,9 +250,13 @@ func TestNewIncremental_AppendsHParam(t *testing.T) {
 	if len(receivedQueries) == 0 {
 		t.Fatal("no API requests made")
 	}
+	// SyncClasses issues a base request without the h param. Ensure that
+	// every request that targets details (ac=detail) carries the h param.
 	for i, q := range receivedQueries {
-		if got := q.Get("h"); got != "24" {
-			t.Errorf("request %d: h param = %q, want \"24\"", i, got)
+		if q.Get("ac") == "detail" {
+			if got := q.Get("h"); got != "24" {
+				t.Errorf("request %d: h param = %q, want \"24\"", i, got)
+			}
 		}
 	}
 }
@@ -387,13 +392,10 @@ func TestGetLocalCategoryID_CreatesMissingMapping(t *testing.T) {
 		t.Errorf("expected 0 for unmapped category, got %d", id)
 	}
 
-	// The placeholder row must exist now.
+	// With the new behaviour there is no placeholder CategoryMap row created.
 	var cm models.CategoryMap
-	if err := db.Where("source_id = ? AND remote_type_id = ?", 1, "action").First(&cm).Error; err != nil {
-		t.Fatalf("CategoryMap row not created: %v", err)
-	}
-	if cm.LocalCategoryID != 0 {
-		t.Errorf("LocalCategoryID = %d, want 0", cm.LocalCategoryID)
+	if err := db.Where("source_id = ? AND remote_type_id = ?", 1, "action").First(&cm).Error; err == nil {
+		t.Fatalf("unexpected CategoryMap row found: %+v", cm)
 	}
 }
 
@@ -482,10 +484,20 @@ func TestFetchPage_ACDetailParam(t *testing.T) {
 	if len(receivedQueries) == 0 {
 		t.Fatal("no API requests made")
 	}
+	// SyncClasses issues a base request without ac=detail. Ensure that
+	// requests that are expected to fetch details include ac=detail.
+	hasDetail := false
 	for i, q := range receivedQueries {
-		if got := q.Get("ac"); got != "detail" {
-			t.Errorf("request %d: ac param = %q, want \"detail\"", i, got)
+		if q.Get("ac") == "detail" {
+			hasDetail = true
 		}
+		// If a pg parameter is present it should be a detail fetch.
+		if q.Get("pg") != "" && q.Get("ac") != "detail" {
+			t.Errorf("request %d: pg present but ac = %q, want \"detail\"", i, q.Get("ac"))
+		}
+	}
+	if !hasDetail {
+		t.Error("expected at least one request with ac=detail")
 	}
 }
 
@@ -547,25 +559,21 @@ func TestPopulateCategoryMaps(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	// Two CategoryMap rows should have been created with the correct RemoteNames.
-	var rows []models.CategoryMap
-	db.Where("source_id = ?", src.ID).Find(&rows)
-
-	byID := make(map[string]models.CategoryMap)
-	for _, r := range rows {
-		byID[r.RemoteTypeID] = r
+	// Two Category rows should have been created with the correct RemoteID and names.
+	var cat1 models.Category
+	if err := db.Where("remote_id = ?", 1).First(&cat1).Error; err != nil {
+		t.Fatalf("category for remote_id=1 not found: %v", err)
+	}
+	if cat1.Name != "电影" {
+		t.Errorf("category name for remote_id=1 = %q, want 电影", cat1.Name)
 	}
 
-	if cm, ok := byID["1"]; !ok {
-		t.Error("CategoryMap for type_id=1 not found")
-	} else if cm.RemoteName != "电影" {
-		t.Errorf("RemoteName for type_id=1 = %q, want 电影", cm.RemoteName)
+	var cat2 models.Category
+	if err := db.Where("remote_id = ?", 2).First(&cat2).Error; err != nil {
+		t.Fatalf("category for remote_id=2 not found: %v", err)
 	}
-
-	if cm, ok := byID["2"]; !ok {
-		t.Error("CategoryMap for type_id=2 not found")
-	} else if cm.RemoteName != "电视剧" {
-		t.Errorf("RemoteName for type_id=2 = %q, want 电视剧", cm.RemoteName)
+	if cat2.Name != "电视剧" {
+		t.Errorf("category name for remote_id=2 = %q, want 电视剧", cat2.Name)
 	}
 }
 
@@ -598,31 +606,36 @@ func TestPopulateCategoryMaps_Hierarchical(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	var rows []models.CategoryMap
-	db.Where("source_id = ?", src.ID).Find(&rows)
-	byID := make(map[string]models.CategoryMap)
-	for _, r := range rows {
-		byID[r.RemoteTypeID] = r
+	// Verify parent category exists and child categories exist with proper
+	// parent linkage and RemoteID values.
+	var parent models.Category
+	if err := db.Where("remote_id = ?", 2).First(&parent).Error; err != nil {
+		t.Fatalf("parent category remote_id=2 not found: %v", err)
+	}
+	if parent.Name != "连续剧" {
+		t.Errorf("parent name = %q, want 连续剧", parent.Name)
 	}
 
-	// Parent category stored as-is.
-	if cm, ok := byID["2"]; !ok {
-		t.Error("CategoryMap for type_id=2 not found")
-	} else if cm.RemoteName != "连续剧" {
-		t.Errorf("RemoteName for type_id=2 = %q, want 连续剧", cm.RemoteName)
+	var child16 models.Category
+	if err := db.Where("remote_id = ?", 16).First(&child16).Error; err != nil {
+		t.Fatalf("child category remote_id=16 not found: %v", err)
+	}
+	if child16.ParentID != parent.ID {
+		t.Errorf("child16.ParentID = %d, want %d", child16.ParentID, parent.ID)
+	}
+	if child16.Name != "韩剧" {
+		t.Errorf("child16.Name = %q, want 韩剧", child16.Name)
 	}
 
-	// Child categories stored with "Parent > Child" format.
-	if cm, ok := byID["16"]; !ok {
-		t.Error("CategoryMap for type_id=16 not found")
-	} else if cm.RemoteName != "连续剧 > 韩剧" {
-		t.Errorf("RemoteName for type_id=16 = %q, want 连续剧 > 韩剧", cm.RemoteName)
+	var child22 models.Category
+	if err := db.Where("remote_id = ?", 22).First(&child22).Error; err != nil {
+		t.Fatalf("child category remote_id=22 not found: %v", err)
 	}
-
-	if cm, ok := byID["22"]; !ok {
-		t.Error("CategoryMap for type_id=22 not found")
-	} else if cm.RemoteName != "连续剧 > 日本剧" {
-		t.Errorf("RemoteName for type_id=22 = %q, want 连续剧 > 日本剧", cm.RemoteName)
+	if child22.ParentID != parent.ID {
+		t.Errorf("child22.ParentID = %d, want %d", child22.ParentID, parent.ID)
+	}
+	if child22.Name != "日本剧" {
+		t.Errorf("child22.Name = %q, want 日本剧", child22.Name)
 	}
 }
 
@@ -682,16 +695,17 @@ func TestUpsertMovie_HTMLStripped(t *testing.T) {
 // persisted when a new placeholder CategoryMap row is created.
 func TestGetLocalCategoryID_StoresRemoteName(t *testing.T) {
 	db := newTestDB(t)
-	c := &Collector{DB: db, CollectionSourceID: 1}
-
-	c.GetLocalCategoryID(1, "22", "日本剧")
-
-	var cm models.CategoryMap
-	if err := db.Where("source_id = ? AND remote_type_id = ?", 1, "22").First(&cm).Error; err != nil {
-		t.Fatalf("CategoryMap row not found: %v", err)
+	// New behaviour: GetLocalCategoryID does not create CategoryMap rows.
+	// Instead, categories should be created via SyncClasses. Create a
+	// Category with RemoteID and verify GetLocalCategoryID returns it.
+	cat := models.Category{Name: "日本剧", ParentID: 0, RemoteID: 22, Enabled: true}
+	if err := db.Create(&cat).Error; err != nil {
+		t.Fatalf("create category: %v", err)
 	}
-	if cm.RemoteName != "日本剧" {
-		t.Errorf("RemoteName = %q, want 日本剧", cm.RemoteName)
+	c := &Collector{DB: db, CollectionSourceID: 1}
+	id := c.GetLocalCategoryID(1, "22", "日本剧")
+	if id != cat.ID {
+		t.Errorf("GetLocalCategoryID = %d, want %d", id, cat.ID)
 	}
 }
 
@@ -724,31 +738,27 @@ func TestPopulateCategoryMaps_Hierarchical_RemoteTypePID(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	var rows []models.CategoryMap
-	db.Where("source_id = ?", src.ID).Find(&rows)
-	byID := make(map[string]models.CategoryMap)
-	for _, r := range rows {
-		byID[r.RemoteTypeID] = r
+	// Verify categories exist and child categories have ParentID set to the
+	// parent's ID (RemoteTypePID concept is represented by ParentID linking).
+	var parent models.Category
+	if err := db.Where("remote_id = ?", 2).First(&parent).Error; err != nil {
+		t.Fatalf("parent category remote_id=2 not found: %v", err)
 	}
 
-	// Parent category must have RemoteTypePID = 0.
-	if cm, ok := byID["2"]; !ok {
-		t.Error("CategoryMap for type_id=2 not found")
-	} else if cm.RemoteTypePID != 0 {
-		t.Errorf("RemoteTypePID for type_id=2 = %d, want 0", cm.RemoteTypePID)
+	var c16 models.Category
+	if err := db.Where("remote_id = ?", 16).First(&c16).Error; err != nil {
+		t.Fatalf("child remote_id=16 not found: %v", err)
+	}
+	if c16.ParentID != parent.ID {
+		t.Errorf("c16.ParentID = %d, want %d", c16.ParentID, parent.ID)
 	}
 
-	// Child categories must carry the parent's remote type_id.
-	if cm, ok := byID["16"]; !ok {
-		t.Error("CategoryMap for type_id=16 not found")
-	} else if cm.RemoteTypePID != 2 {
-		t.Errorf("RemoteTypePID for type_id=16 = %d, want 2", cm.RemoteTypePID)
+	var c22 models.Category
+	if err := db.Where("remote_id = ?", 22).First(&c22).Error; err != nil {
+		t.Fatalf("child remote_id=22 not found: %v", err)
 	}
-
-	if cm, ok := byID["22"]; !ok {
-		t.Error("CategoryMap for type_id=22 not found")
-	} else if cm.RemoteTypePID != 2 {
-		t.Errorf("RemoteTypePID for type_id=22 = %d, want 2", cm.RemoteTypePID)
+	if c22.ParentID != parent.ID {
+		t.Errorf("c22.ParentID = %d, want %d", c22.ParentID, parent.ID)
 	}
 }
 
@@ -859,20 +869,14 @@ func TestUpsertMovie_FallsBackToTypeID1(t *testing.T) {
 	db := newTestDB(t)
 
 	// Create a local category and map it to the PRIMARY remote type (type_id=2).
-	parentCat := models.Category{Name: "连续剧", ParentID: 0, Enabled: true}
+	parentCat := models.Category{Name: "连续剧", ParentID: 0, RemoteID: 2, Enabled: true}
 	db.Create(&parentCat)
 
 	src := models.CollectionSource{Name: "FB", APIURL: "http://example.com?", SourceKey: "fb", Enabled: boolPtr(true)}
 	db.Create(&src)
 
-	// Map remote type_id=2 (primary) → local parentCat.
-	db.Create(&models.CategoryMap{
-		SourceID:        src.ID,
-		RemoteTypeID:    "2",
-		RemoteName:      "连续剧",
-		LocalCategoryID: parentCat.ID,
-	})
-	// No mapping for type_id=16 (secondary).
+	// No mapping for type_id=16 (secondary). The collector will fall back
+	// to matching categories by RemoteID (we set parentCat.RemoteID above).
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := apiResponse{

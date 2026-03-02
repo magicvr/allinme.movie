@@ -21,7 +21,9 @@ func newTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Movie{}, &models.VideoSource{}); err != nil {
+	// Include Category migration because the collector's SyncClasses may run
+	// during scheduler tests and expects the categories table to exist.
+	if err := db.AutoMigrate(&models.Movie{}, &models.VideoSource{}, &models.Category{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db
@@ -82,10 +84,19 @@ func TestScheduler_RunIncremental_AppendsHParam(t *testing.T) {
 	if len(queries) == 0 {
 		t.Fatal("expected at least one API request")
 	}
+	// SyncClasses issues a base request without h. Ensure that detail
+	// requests include the h param.
+	hasDetail := false
 	for _, q := range queries {
-		if got := q.Get("h"); got != "12" {
-			t.Errorf("query h = %q, want %q", got, "12")
+		if q.Get("ac") == "detail" {
+			hasDetail = true
+			if got := q.Get("h"); got != "12" {
+				t.Errorf("query h = %q, want %q", got, "12")
+			}
 		}
+	}
+	if !hasDetail {
+		t.Error("expected at least one detail request with ac=detail")
 	}
 }
 
