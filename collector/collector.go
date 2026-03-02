@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// htmlTagRe matches HTML tags for stripping purposes.
+var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
 
 const defaultMaxWorkers = 1
 
@@ -57,6 +61,7 @@ type apiMovie struct {
 	VodClass   string  `json:"vod_class"`
 	VodPlayURL string  `json:"vod_play_url"`
 	VodTypeID  int     `json:"type_id"`
+	TypeID1    int     `json:"type_id_1"`
 	TypeName   string  `json:"type_name"`
 	VodRemarks string  `json:"vod_remarks"`
 }
@@ -64,7 +69,13 @@ type apiMovie struct {
 // apiClass maps a single entry in the top-level class list returned by the API.
 type apiClass struct {
 	TypeID   int    `json:"type_id"`
+	TypePID  int    `json:"type_pid"`
 	TypeName string `json:"type_name"`
+}
+
+// stripHTML removes HTML tags from s and returns plain text.
+func stripHTML(s string) string {
+	return strings.TrimSpace(htmlTagRe.ReplaceAllString(s, ""))
 }
 
 // apiResponse maps the top-level JSON structure.
@@ -246,41 +257,66 @@ func (c *Collector) processMovies(list []apiMovie) {
 
 // GetLocalCategoryID returns the local category ID for a given source and
 // remote type ID.  If no mapping exists it inserts a placeholder record with
-// LocalCategoryID = 0 (to-be-bound) and returns 0.
-func (c *Collector) GetLocalCategoryID(sourceID uint, remoteTypeID string) uint {
+// LocalCategoryID = 0 (to-be-bound) and returns 0.  remoteName is stored on
+// the placeholder row so admins can identify it in the back-end.
+func (c *Collector) GetLocalCategoryID(sourceID uint, remoteTypeID string, remoteName string) uint {
 	if sourceID == 0 || remoteTypeID == "" {
 		return 0
 	}
-	cm := models.CategoryMap{SourceID: sourceID, RemoteTypeID: remoteTypeID}
-	result := c.DB.FirstOrCreate(&cm)
+	var cm models.CategoryMap
+	result := c.DB.
+		Attrs(models.CategoryMap{RemoteName: remoteName}).
+		FirstOrCreate(&cm, models.CategoryMap{SourceID: sourceID, RemoteTypeID: remoteTypeID})
 	if result.Error != nil {
 		log.Printf("collector: GetLocalCategoryID error: %v", result.Error)
 		return 0
+	}
+	// Update RemoteName if the existing row has no name yet.
+	if cm.RemoteName == "" && remoteName != "" {
+		if err := c.DB.Model(&cm).Update("remote_name", remoteName).Error; err != nil {
+			log.Printf("collector: GetLocalCategoryID update name error: %v", err)
+		}
 	}
 	return cm.LocalCategoryID
 }
 
 // populateCategoryMaps inserts or updates CategoryMap rows for the remote class
 // list returned on the first API page, filling in RemoteName for later manual
-// binding.
+// binding.  Child categories (TypePID != 0) are stored with the display name
+// "ParentName > ChildName" for easy identification in the admin back-end.
 func (c *Collector) populateCategoryMaps(classes []apiClass) {
+	// Build a lookup map from TypeID → TypeName for parent resolution.
+	nameByID := make(map[int]string, len(classes))
+	for _, cl := range classes {
+		nameByID[cl.TypeID] = cl.TypeName
+	}
+
 	for _, cl := range classes {
 		typeIDStr := fmt.Sprintf("%d", cl.TypeID)
+
+		// Compose the display name: "ParentName > ChildName" when a parent exists.
+		displayName := cl.TypeName
+		if cl.TypePID != 0 {
+			if parentName, ok := nameByID[cl.TypePID]; ok && parentName != "" {
+				displayName = parentName + " > " + cl.TypeName
+			}
+		}
+
 		var cm models.CategoryMap
 		err := c.DB.Where("source_id = ? AND remote_type_id = ?", c.CollectionSourceID, typeIDStr).First(&cm).Error
 		if err == gorm.ErrRecordNotFound {
 			cm = models.CategoryMap{
 				SourceID:     c.CollectionSourceID,
 				RemoteTypeID: typeIDStr,
-				RemoteName:   cl.TypeName,
+				RemoteName:   displayName,
 			}
 			if createErr := c.DB.Create(&cm).Error; createErr != nil {
 				log.Printf("collector: populateCategoryMaps create error: %v", createErr)
 			}
 		} else if err != nil {
 			log.Printf("collector: populateCategoryMaps lookup error: %v", err)
-		} else if cm.RemoteName == "" && cl.TypeName != "" {
-			if updateErr := c.DB.Model(&cm).Update("remote_name", cl.TypeName).Error; updateErr != nil {
+		} else if cm.RemoteName == "" && displayName != "" {
+			if updateErr := c.DB.Model(&cm).Update("remote_name", displayName).Error; updateErr != nil {
 				log.Printf("collector: populateCategoryMaps update error: %v", updateErr)
 			}
 		}
@@ -294,12 +330,14 @@ func (c *Collector) upsertMovie(am apiMovie) error {
 		return fmt.Errorf("empty vod_name")
 	}
 
-	localCatID := c.GetLocalCategoryID(c.CollectionSourceID, fmt.Sprintf("%d", am.VodTypeID))
+	localCatID := c.GetLocalCategoryID(c.CollectionSourceID, fmt.Sprintf("%d", am.VodTypeID), am.TypeName)
+
+	description := stripHTML(am.VodContent)
 
 	attrs := map[string]interface{}{
 		"sub_title":   am.VodSub,
 		"poster":      am.VodPic,
-		"description": am.VodContent,
+		"description": description,
 		"year":        am.VodYear,
 		"area":        am.VodArea,
 		"class":       am.VodClass,
@@ -316,7 +354,7 @@ func (c *Collector) upsertMovie(am apiMovie) error {
 			ThirdPartyID: fmt.Sprintf("%d", int(am.VodID)),
 			SubTitle:     am.VodSub,
 			Poster:       am.VodPic,
-			Description:  am.VodContent,
+			Description:  description,
 			Year:         am.VodYear,
 			Area:         am.VodArea,
 			Class:        am.VodClass,
