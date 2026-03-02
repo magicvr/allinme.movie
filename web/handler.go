@@ -22,8 +22,11 @@ type Handler struct {
 
 // pageData is passed to every template render.
 type pageData struct {
-	Query  string
-	Movies []models.Movie
+	Query       string
+	Movies      []models.Movie
+	Categories  []models.Category // top-level categories with Children preloaded
+	ActiveCat   uint              // selected parent category ID (from ?cat=)
+	ActiveSubCat uint             // selected sub-category ID (from ?sub_cat=)
 }
 
 // detailPageData is passed to the detail template.
@@ -34,18 +37,48 @@ type detailPageData struct {
 
 // Index handles GET / – shows the most recently updated movies.
 func (h *Handler) Index(w http.ResponseWriter, r *http.Request) {
+	categories := h.loadCategoryTree()
+
 	db := h.DB.Order("update_time desc").Limit(60)
-	if catIDStr := r.URL.Query().Get("category_id"); catIDStr != "" {
+	var activeCat, activeSubCat uint
+
+	if subCatIDStr := r.URL.Query().Get("sub_cat"); subCatIDStr != "" {
+		if subCatID, err := strconv.ParseUint(subCatIDStr, 10, 64); err == nil && subCatID > 0 {
+			activeSubCat = uint(subCatID)
+			db = db.Where("category_id = ?", subCatID)
+		}
+	}
+
+	if catIDStr := r.URL.Query().Get("cat"); catIDStr != "" {
+		if catID, err := strconv.ParseUint(catIDStr, 10, 64); err == nil && catID > 0 {
+			activeCat = uint(catID)
+			if activeSubCat == 0 {
+				// Show all movies whose category is a direct child of this parent,
+				// or the parent itself (covers categories with no sub-divisions).
+				db = db.Where(
+					"category_id IN (SELECT id FROM categories WHERE parent_id = ? AND enabled = 1) OR category_id = ?",
+					catID, catID,
+				)
+			}
+		}
+	} else if catIDStr := r.URL.Query().Get("category_id"); catIDStr != "" {
+		// Backward-compatible parameter kept for existing links.
 		if catID, err := strconv.ParseUint(catIDStr, 10, 64); err == nil && catID > 0 {
 			db = db.Where("category_id = ?", catID)
 		}
 	}
+
 	var movies []models.Movie
 	if err := db.Find(&movies).Error; err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.render(w, pageData{Movies: movies})
+	h.render(w, pageData{
+		Movies:       movies,
+		Categories:   categories,
+		ActiveCat:    activeCat,
+		ActiveSubCat: activeSubCat,
+	})
 }
 
 // Search handles GET /search?q=xxx – shows fuzzy-matched movies.
@@ -64,7 +97,21 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.render(w, pageData{Query: q, Movies: movies})
+
+	h.render(w, pageData{Query: q, Movies: movies, Categories: h.loadCategoryTree()})
+}
+
+// loadCategoryTree returns all enabled top-level categories with their enabled
+// children pre-loaded.  Errors are logged and an empty slice is returned so
+// that callers can degrade gracefully.
+func (h *Handler) loadCategoryTree() []models.Category {
+	var categories []models.Category
+	if err := h.DB.Where("enabled = ? AND parent_id = 0", true).
+		Preload("Children", "enabled = ?", true).
+		Find(&categories).Error; err != nil {
+		log.Printf("web: load category tree: %v", err)
+	}
+	return categories
 }
 
 func (h *Handler) render(w http.ResponseWriter, data pageData) {
