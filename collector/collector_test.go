@@ -694,3 +694,217 @@ func TestGetLocalCategoryID_StoresRemoteName(t *testing.T) {
 		t.Errorf("RemoteName = %q, want 日本剧", cm.RemoteName)
 	}
 }
+
+// TestPopulateCategoryMaps_Hierarchical_RemoteTypePID verifies that
+// RemoteTypePID is stored on CategoryMap rows for child classes.
+func TestPopulateCategoryMaps_Hierarchical_RemoteTypePID(t *testing.T) {
+	db := newTestDB(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := apiResponse{
+			PageCount: 1,
+			Class: []apiClass{
+				{TypeID: 2, TypePID: 0, TypeName: "连续剧"},
+				{TypeID: 16, TypePID: 2, TypeName: "韩剧"},
+				{TypeID: 22, TypePID: 2, TypeName: "日本剧"},
+			},
+			List: []apiMovie{{VodID: 1, VodName: "PID Movie", VodPlayURL: "HD$http://example.com/hd.m3u8"}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	src := models.CollectionSource{Name: "P", APIURL: srv.URL + "?", SourceKey: "p", Enabled: boolPtr(true)}
+	db.Create(&src)
+
+	c := New(srv.URL+"?", db)
+	c.CollectionSourceID = src.ID
+	if err := c.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var rows []models.CategoryMap
+	db.Where("source_id = ?", src.ID).Find(&rows)
+	byID := make(map[string]models.CategoryMap)
+	for _, r := range rows {
+		byID[r.RemoteTypeID] = r
+	}
+
+	// Parent category must have RemoteTypePID = 0.
+	if cm, ok := byID["2"]; !ok {
+		t.Error("CategoryMap for type_id=2 not found")
+	} else if cm.RemoteTypePID != 0 {
+		t.Errorf("RemoteTypePID for type_id=2 = %d, want 0", cm.RemoteTypePID)
+	}
+
+	// Child categories must carry the parent's remote type_id.
+	if cm, ok := byID["16"]; !ok {
+		t.Error("CategoryMap for type_id=16 not found")
+	} else if cm.RemoteTypePID != 2 {
+		t.Errorf("RemoteTypePID for type_id=16 = %d, want 2", cm.RemoteTypePID)
+	}
+
+	if cm, ok := byID["22"]; !ok {
+		t.Error("CategoryMap for type_id=22 not found")
+	} else if cm.RemoteTypePID != 2 {
+		t.Errorf("RemoteTypePID for type_id=22 = %d, want 2", cm.RemoteTypePID)
+	}
+}
+
+// TestPopulateCategoryMaps_SetsRemoteID verifies that Category rows are created
+// with RemoteID set to the corresponding remote type_id.
+func TestPopulateCategoryMaps_SetsRemoteID(t *testing.T) {
+	db := newTestDB(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := apiResponse{
+			PageCount: 1,
+			Class: []apiClass{
+				{TypeID: 1, TypePID: 0, TypeName: "电影"},
+				{TypeID: 2, TypePID: 0, TypeName: "连续剧"},
+				{TypeID: 16, TypePID: 2, TypeName: "韩剧"},
+			},
+			List: []apiMovie{{VodID: 1, VodName: "RemoteID Movie", VodPlayURL: "HD$http://example.com/hd.m3u8"}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	src := models.CollectionSource{Name: "R", APIURL: srv.URL + "?", SourceKey: "r", Enabled: boolPtr(true)}
+	db.Create(&src)
+
+	c := New(srv.URL+"?", db)
+	c.CollectionSourceID = src.ID
+	if err := c.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Verify RemoteID on parent categories.
+	var dianying models.Category
+	if err := db.Where("name = ? AND parent_id = 0", "电影").First(&dianying).Error; err != nil {
+		t.Fatalf("category 电影 not found: %v", err)
+	}
+	if dianying.RemoteID != 1 {
+		t.Errorf("电影 RemoteID = %d, want 1", dianying.RemoteID)
+	}
+
+	var lianju models.Category
+	if err := db.Where("name = ? AND parent_id = 0", "连续剧").First(&lianju).Error; err != nil {
+		t.Fatalf("category 连续剧 not found: %v", err)
+	}
+	if lianju.RemoteID != 2 {
+		t.Errorf("连续剧 RemoteID = %d, want 2", lianju.RemoteID)
+	}
+
+	// Verify RemoteID on child category.
+	var hanju models.Category
+	if err := db.Where("name = ? AND parent_id = ?", "韩剧", lianju.ID).First(&hanju).Error; err != nil {
+		t.Fatalf("category 韩剧 not found: %v", err)
+	}
+	if hanju.RemoteID != 16 {
+		t.Errorf("韩剧 RemoteID = %d, want 16", hanju.RemoteID)
+	}
+}
+
+// TestSyncClasses_FetchesBaseURL verifies that SyncClasses makes a request to
+// the base API URL without the ac=detail query parameter.
+func TestSyncClasses_FetchesBaseURL(t *testing.T) {
+	db := newTestDB(t)
+	var receivedQueries []url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedQueries = append(receivedQueries, r.URL.Query())
+		resp := apiResponse{
+			PageCount: 1,
+			Class: []apiClass{
+				{TypeID: 1, TypePID: 0, TypeName: "电影"},
+			},
+			List: []apiMovie{{VodID: 1, VodName: "Sync Movie", VodPlayURL: "HD$http://example.com/hd.m3u8"}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	src := models.CollectionSource{Name: "SyncSrc", APIURL: srv.URL + "?", SourceKey: "sync", Enabled: boolPtr(true)}
+	db.Create(&src)
+
+	c := New(srv.URL+"?", db)
+	c.CollectionSourceID = src.ID
+	if err := c.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(receivedQueries) == 0 {
+		t.Fatal("no API requests made")
+	}
+
+	// At least one request should NOT have ac=detail (the SyncClasses request).
+	hasBaseRequest := false
+	for _, q := range receivedQueries {
+		if q.Get("ac") == "" {
+			hasBaseRequest = true
+			break
+		}
+	}
+	if !hasBaseRequest {
+		t.Error("expected at least one request without ac=detail for SyncClasses, but all had ac=detail")
+	}
+}
+
+// TestUpsertMovie_FallsBackToTypeID1 verifies that when no local category is
+// mapped for the secondary type_id, the primary type_id_1 is used as a fallback.
+func TestUpsertMovie_FallsBackToTypeID1(t *testing.T) {
+	db := newTestDB(t)
+
+	// Create a local category and map it to the PRIMARY remote type (type_id=2).
+	parentCat := models.Category{Name: "连续剧", ParentID: 0, Enabled: true}
+	db.Create(&parentCat)
+
+	src := models.CollectionSource{Name: "FB", APIURL: "http://example.com?", SourceKey: "fb", Enabled: boolPtr(true)}
+	db.Create(&src)
+
+	// Map remote type_id=2 (primary) → local parentCat.
+	db.Create(&models.CategoryMap{
+		SourceID:        src.ID,
+		RemoteTypeID:    "2",
+		RemoteName:      "连续剧",
+		LocalCategoryID: parentCat.ID,
+	})
+	// No mapping for type_id=16 (secondary).
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := apiResponse{
+			PageCount: 1,
+			List: []apiMovie{
+				{
+					VodID: 1, VodName: "Fallback Movie",
+					VodTypeID:  16, // secondary – not mapped
+					TypeID1:    2,  // primary – mapped to parentCat
+					TypeName:   "韩剧",
+					VodPlayURL: "HD$http://example.com/hd.m3u8",
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL+"?", db)
+	c.CollectionSourceID = src.ID
+	c.SourceName = src.Name
+	if err := c.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The movie should have been assigned the parent (fallback) category.
+	var movie models.Movie
+	if err := db.Where("title = ?", "Fallback Movie").First(&movie).Error; err != nil {
+		t.Fatalf("movie not found: %v", err)
+	}
+	if movie.CategoryID != parentCat.ID {
+		t.Errorf("CategoryID = %d, want %d (parent fallback)", movie.CategoryID, parentCat.ID)
+	}
+}
