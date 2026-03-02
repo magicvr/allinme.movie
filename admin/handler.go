@@ -174,7 +174,10 @@ func (h *Handler) CreateCollectionSource(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "name, api_url, and source_key are required", http.StatusBadRequest)
 		return
 	}
-	enabled := req.Enabled == nil || *req.Enabled // default true when not specified
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
 	src := models.CollectionSource{
 		Name:      req.Name,
 		APIURL:    req.APIURL,

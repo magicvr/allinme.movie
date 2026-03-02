@@ -185,6 +185,9 @@ func TestCollectorRun_Upsert(t *testing.T) {
 
 	var movie models.Movie
 	db.First(&movie)
+	if movie.Title != "Same Title" {
+		t.Errorf("Title = %q, want %q (title must not change)", movie.Title, "Same Title")
+	}
 	if movie.Poster != "http://new.com/poster.jpg" {
 		t.Errorf("Poster = %q, want %q", movie.Poster, "http://new.com/poster.jpg")
 	}

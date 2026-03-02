@@ -193,8 +193,7 @@ func (c *Collector) GetLocalCategoryID(sourceID uint, remoteTypeID string) uint 
 		return 0
 	}
 	cm := models.CategoryMap{SourceID: sourceID, RemoteTypeID: remoteTypeID}
-	result := c.DB.Where(models.CategoryMap{SourceID: sourceID, RemoteTypeID: remoteTypeID}).
-		FirstOrCreate(&cm)
+	result := c.DB.FirstOrCreate(&cm)
 	if result.Error != nil {
 		log.Printf("collector: GetLocalCategoryID error: %v", result.Error)
 		return 0
