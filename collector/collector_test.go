@@ -203,7 +203,7 @@ func TestCollectorRun_SkipsMalformedMovie(t *testing.T) {
 	srv := fakeServer(t, [][]apiMovie{
 		{
 			{VodID: 0, VodName: "", VodPlayURL: ""},           // should be skipped (empty name)
-			{VodID: 2, VodName: "Good Movie", VodPlayURL: ""}, // should be inserted
+			{VodID: 2, VodName: "Good Movie", VodPlayURL: ""}, // should be deleted (no video sources)
 		},
 	})
 	defer srv.Close()
@@ -215,8 +215,8 @@ func TestCollectorRun_SkipsMalformedMovie(t *testing.T) {
 
 	var count int64
 	db.Model(&models.Movie{}).Count(&count)
-	if count != 1 {
-		t.Errorf("movie count = %d, want 1", count)
+	if count != 0 {
+		t.Errorf("movie count = %d, want 0", count)
 	}
 }
 

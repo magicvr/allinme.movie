@@ -197,7 +197,8 @@ func (c *Collector) upsertMovie(am apiMovie) error {
 			return fmt.Errorf("delete old sources: %w", err)
 		}
 		if len(newSources) == 0 {
-			return nil
+			// Orphan check: delete a movie that ends up with no video sources.
+			return tx.Delete(&models.Movie{}, movie.ID).Error
 		}
 		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&newSources).Error
 	})
