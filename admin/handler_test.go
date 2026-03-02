@@ -3,6 +3,7 @@ package admin
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,13 +13,16 @@ import (
 	"my-movie-site/models"
 )
 
+// boolPtr returns a pointer to the given bool value.
+func boolPtr(b bool) *bool { return &b }
+
 func newTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Movie{}, &models.VideoSource{}); err != nil {
+	if err := db.AutoMigrate(&models.Movie{}, &models.VideoSource{}, &models.CollectionSource{}, &models.CategoryMap{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db
@@ -50,6 +54,9 @@ func newMux(h *Handler) *http.ServeMux {
 	mux.HandleFunc("DELETE /admin/source/{key}", h.DeleteSource)
 	mux.HandleFunc("PUT /admin/source/replace-base", h.ReplaceBase)
 	mux.HandleFunc("POST /admin/sync", h.Sync)
+	mux.HandleFunc("GET /admin/collection-sources", h.ListCollectionSources)
+	mux.HandleFunc("POST /admin/collection-sources", h.CreateCollectionSource)
+	mux.HandleFunc("DELETE /admin/collection-sources/{id}", h.DeleteCollectionSource)
 	return mux
 }
 
@@ -260,5 +267,70 @@ func TestSync_WhileRunningReturnsConflict(t *testing.T) {
 
 	if rr.Code != http.StatusConflict {
 		t.Errorf("status = %d, want %d", rr.Code, http.StatusConflict)
+	}
+}
+
+// ---- CollectionSource CRUD tests ----
+
+func TestCreateAndListCollectionSources(t *testing.T) {
+	db := newTestDB(t)
+	h := &Handler{DB: db}
+	mux := newMux(h)
+
+	body, _ := json.Marshal(collectionSourceRequest{
+		Name:      "Test Source",
+		APIURL:    "http://api.example.com/v1",
+		SourceKey: "test_src",
+		Enabled:   boolPtr(true),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/collection-sources", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", rr.Code)
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/admin/collection-sources", nil)
+	rr2 := httptest.NewRecorder()
+	mux.ServeHTTP(rr2, req2)
+
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", rr2.Code)
+	}
+
+	var sources []models.CollectionSource
+	if err := json.NewDecoder(rr2.Body).Decode(&sources); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("len = %d, want 1", len(sources))
+	}
+	if sources[0].Name != "Test Source" {
+		t.Errorf("Name = %q, want Test Source", sources[0].Name)
+	}
+}
+
+func TestDeleteCollectionSource(t *testing.T) {
+	db := newTestDB(t)
+	h := &Handler{DB: db}
+	mux := newMux(h)
+
+	src := models.CollectionSource{Name: "ToDelete", APIURL: "http://x.com", SourceKey: "x", Enabled: boolPtr(true)}
+	db.Create(&src)
+
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/admin/collection-sources/%d", src.ID), nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want 204", rr.Code)
+	}
+
+	var count int64
+	db.Model(&models.CollectionSource{}).Count(&count)
+	if count != 0 {
+		t.Errorf("source count = %d, want 0", count)
 	}
 }

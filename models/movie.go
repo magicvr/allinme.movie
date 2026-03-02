@@ -4,7 +4,8 @@ import "time"
 
 type Movie struct {
 	ID            uint      `gorm:"primaryKey"`
-	ThirdPartyID  string    `gorm:"uniqueIndex"`
+	ThirdPartyID  string    `gorm:"index"`
+	CategoryID    uint
 	Title         string    `gorm:"not null"`
 	SubTitle      string
 	Poster        string

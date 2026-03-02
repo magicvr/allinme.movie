@@ -84,11 +84,15 @@ func cleanOrphanMovies(db *gorm.DB) error {
 }
 
 // Sync handles POST /admin/sync.
-// It asynchronously triggers a full collection run.  A debounce guard prevents
-// a second run from starting while one is already in progress; such requests
-// receive 409 Conflict.
+// If CollectionSources are configured in the database they are all run in
+// sequence; otherwise falls back to the single CollectorURL (legacy mode).
+// A debounce guard prevents a second run from starting while one is already
+// in progress; such requests receive 409 Conflict.
 func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
-	if h.CollectorURL == "" {
+	var dbSourceCount int64
+	h.DB.Model(&models.CollectionSource{}).Where("enabled = ?", true).Count(&dbSourceCount)
+
+	if dbSourceCount == 0 && h.CollectorURL == "" {
 		http.Error(w, "collector not configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -108,6 +112,16 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 			h.syncing = false
 			h.mu.Unlock()
 		}()
+
+		if dbSourceCount > 0 {
+			if err := collector.RunAllFromDB(r.Context(), h.DB); err != nil {
+				log.Printf("admin: multi-source sync failed: %v", err)
+			} else {
+				log.Print("admin: multi-source sync completed")
+			}
+			return
+		}
+
 		col := collector.New(h.CollectorURL, h.DB)
 		if err := col.Run(); err != nil {
 			log.Printf("admin: manual sync failed: %v", err)
@@ -126,4 +140,69 @@ func (h *Handler) AdminPage(w http.ResponseWriter, r *http.Request) {
 		log.Printf("admin: template error: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 	}
+}
+
+// collectionSourceRequest is the JSON body for CreateCollectionSource.
+type collectionSourceRequest struct {
+	Name      string `json:"name"`
+	APIURL    string `json:"api_url"`
+	SourceKey string `json:"source_key"`
+	Enabled   *bool  `json:"enabled"`
+}
+
+// ListCollectionSources handles GET /admin/collection-sources.
+func (h *Handler) ListCollectionSources(w http.ResponseWriter, r *http.Request) {
+	var sources []models.CollectionSource
+	if err := h.DB.Find(&sources).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(sources); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// CreateCollectionSource handles POST /admin/collection-sources.
+func (h *Handler) CreateCollectionSource(w http.ResponseWriter, r *http.Request) {
+	var req collectionSourceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" || req.APIURL == "" || req.SourceKey == "" {
+		http.Error(w, "name, api_url, and source_key are required", http.StatusBadRequest)
+		return
+	}
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	src := models.CollectionSource{
+		Name:      req.Name,
+		APIURL:    req.APIURL,
+		SourceKey: req.SourceKey,
+		Enabled:   &enabled,
+	}
+	if err := h.DB.Create(&src).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(src)
+}
+
+// DeleteCollectionSource handles DELETE /admin/collection-sources/{id}.
+func (h *Handler) DeleteCollectionSource(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	if idStr == "" {
+		http.Error(w, "missing id", http.StatusBadRequest)
+		return
+	}
+	if err := h.DB.Delete(&models.CollectionSource{}, idStr).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -18,7 +19,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Movie{}, &models.VideoSource{}); err != nil {
+	if err := db.AutoMigrate(&models.Movie{}, &models.VideoSource{}, &models.CollectionSource{}, &models.CategoryMap{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db
@@ -47,6 +48,8 @@ func newMux(h *Handler) *http.ServeMux {
 	mux.HandleFunc("GET /api/movies", h.ListMovies)
 	mux.HandleFunc("GET /api/search", h.SearchMovies)
 	mux.HandleFunc("GET /api/movie/{id}", h.GetMovie)
+	mux.HandleFunc("GET /api/admin/category-maps/unmapped", h.ListUnmappedCategories)
+	mux.HandleFunc("PUT /api/admin/category-maps", h.UpdateCategoryMaps)
 	return mux
 }
 
@@ -252,5 +255,61 @@ func TestGetMovie_InvalidID(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rr.Code)
+	}
+}
+
+// ---- CategoryMap tests ----
+
+func TestListUnmappedCategories(t *testing.T) {
+	db := newTestDB(t)
+	h := &Handler{DB: db}
+	mux := newMux(h)
+
+	// Insert one unmapped and one mapped entry.
+	db.Create(&models.CategoryMap{SourceID: 1, RemoteTypeID: "action", LocalCategoryID: 0})
+	db.Create(&models.CategoryMap{SourceID: 1, RemoteTypeID: "drama", LocalCategoryID: 5})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/category-maps/unmapped", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+
+	var maps []models.CategoryMap
+	if err := json.NewDecoder(rr.Body).Decode(&maps); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(maps) != 1 {
+		t.Fatalf("len = %d, want 1", len(maps))
+	}
+	if maps[0].RemoteTypeID != "action" {
+		t.Errorf("RemoteTypeID = %q, want action", maps[0].RemoteTypeID)
+	}
+}
+
+func TestUpdateCategoryMaps(t *testing.T) {
+	db := newTestDB(t)
+	h := &Handler{DB: db}
+	mux := newMux(h)
+
+	cm := models.CategoryMap{SourceID: 1, RemoteTypeID: "action", LocalCategoryID: 0}
+	db.Create(&cm)
+
+	body, _ := json.Marshal([]categoryMapUpdate{{ID: cm.ID, LocalCategoryID: 7}})
+	req := httptest.NewRequest(http.MethodPut, "/api/admin/category-maps", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rr.Code)
+	}
+
+	var updated models.CategoryMap
+	db.First(&updated, cm.ID)
+	if updated.LocalCategoryID != 7 {
+		t.Errorf("LocalCategoryID = %d, want 7", updated.LocalCategoryID)
 	}
 }
