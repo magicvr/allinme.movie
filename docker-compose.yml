@@ -2,6 +2,7 @@ services:
   app:
     build: .
     image: magicvr/movie
+    container_name: movie
     ports:
       - "${PORT:-8080}:8080"
     env_file:

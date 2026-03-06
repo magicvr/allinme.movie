@@ -44,6 +44,25 @@
 
       <p id="sync-status" class="mt-3 text-sm hidden" role="status" aria-live="polite"></p>
     </section>
+    <!-- 线路替换（后端替换数据库中播放地址的基础域名） -->
+    <section class="bg-gray-900 rounded-xl p-6 mt-6 max-w-md">
+      <h2 class="text-lg font-semibold mb-2 text-gray-100">线路替换</h2>
+      <p class="text-sm text-gray-400 mb-4">输入新的基础域名（例如：example.com），确认后后端会替换存储中视频播放地址的基础域名（保留子域名）。可选地填写来源 `source_key` 仅替换指定来源。</p>
+
+      <div class="flex flex-col gap-2">
+        <input id="base-domain-input" type="text" placeholder="例如：example.com" class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100" />
+        <input id="source-key-input" type="text" placeholder="可选：source_key（留空则替换全部）" class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100" />
+        <div class="flex items-center gap-2">
+          <button
+            id="replace-domain-btn"
+            onclick="onReplaceDomainClick()"
+            class="inline-flex items-center gap-2 rounded-lg bg-yellow-600 hover:bg-yellow-700 px-4 py-2 text-sm font-semibold"
+          >替换</button>
+        </div>
+      </div>
+
+      <p id="replace-status" class="mt-3 text-sm hidden" role="status" aria-live="polite"></p>
+    </section>
   </main>
 
   <script>
@@ -82,6 +101,54 @@
           status.textContent = '网络错误：' + err.message;
           btn.disabled = false;
         });
+    }
+
+    // 调用后端进行数据库中的基础域名替换（线路替换）
+    function onReplaceDomainClick() {
+      var input = document.getElementById('base-domain-input');
+      var sourceInput = document.getElementById('source-key-input');
+      var newBase = input.value && input.value.trim();
+      var sourceKey = sourceInput && sourceInput.value && sourceInput.value.trim();
+      var status = document.getElementById('replace-status');
+      if (!newBase) {
+        status.className = 'mt-3 text-sm text-red-400';
+        status.textContent = '请输入有效的基础域名，例如：example.com';
+        status.classList.remove('hidden');
+        return;
+      }
+
+      var baseValid = /^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(newBase);
+      if (!baseValid) {
+        status.className = 'mt-3 text-sm text-red-400';
+        status.textContent = '基础域名格式无效，请输入类似 example.com 的值';
+        status.classList.remove('hidden');
+        return;
+      }
+
+      var confirmMsg = '将把数据库中存储的播放地址的基础域名替换为：' + newBase + '\n（保留原有子域名部分）。\n确认后操作会修改数据库中的记录，无法在前端撤销。';
+      if (!confirm(confirmMsg)) return;
+
+      status.className = 'mt-3 text-sm text-gray-400';
+      status.textContent = '正在提交替换请求…';
+      status.classList.remove('hidden');
+
+      var body = { new_base: newBase };
+      if (sourceKey) body.source_key = sourceKey;
+
+      fetch('/admin/source/replace-domain', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }).then(function (res) {
+        if (!res.ok) return res.text().then(function (t) { throw new Error(t || res.statusText); });
+        return res.json();
+      }).then(function (data) {
+        status.className = 'mt-3 text-sm text-green-400';
+        status.textContent = '已处理：共扫描 ' + data.scanned + ' 条记录，更新 ' + data.updated + ' 条。';
+      }).catch(function (err) {
+        status.className = 'mt-3 text-sm text-red-400';
+        status.textContent = '替换失败：' + err.message;
+      });
     }
   </script>
 </body>

@@ -8,9 +8,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"my-movie-site/models"
+
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
-	"my-movie-site/models"
 )
 
 // boolPtr returns a pointer to the given bool value.
@@ -53,11 +54,88 @@ func newMux(h *Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("DELETE /admin/source/{key}", h.DeleteSource)
 	mux.HandleFunc("PUT /admin/source/replace-base", h.ReplaceBase)
+	mux.HandleFunc("PUT /admin/source/replace-domain", h.ReplaceDomain)
 	mux.HandleFunc("POST /admin/sync", h.Sync)
 	mux.HandleFunc("GET /admin/collection-sources", h.ListCollectionSources)
 	mux.HandleFunc("POST /admin/collection-sources", h.CreateCollectionSource)
 	mux.HandleFunc("DELETE /admin/collection-sources/{id}", h.DeleteCollectionSource)
 	return mux
+}
+
+func TestReplaceDomain_ReplacesBasePreservingSubdomainsAndPort(t *testing.T) {
+	db := newTestDB(t)
+	h := &Handler{DB: db}
+	mux := newMux(h)
+
+	mid := seedMovie(t, db, "1", "Movie One")
+	// host with subdomain and port
+	sid1 := seedSource(t, db, mid, "hd", "http://play.oldcdn.example.com:8080/path/1.m3u8")
+	// host without subdomain
+	sid2 := seedSource(t, db, mid, "hd", "http://oldcdn.example.com/path/2.m3u8")
+
+	// use a different new_base to force updates
+	body, _ := json.Marshal(map[string]string{"new_base": "example.org"})
+	req := httptest.NewRequest(http.MethodPut, "/admin/source/replace-domain", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var s1, s2 models.VideoSource
+	db.First(&s1, sid1)
+	db.First(&s2, sid2)
+
+	if s1.RawURL != "http://play.oldcdn.example.org:8080/path/1.m3u8" {
+		t.Errorf("s1.RawURL = %q, want %q", s1.RawURL, "http://play.oldcdn.example.org:8080/path/1.m3u8")
+	}
+	if s2.RawURL != "http://oldcdn.example.org/path/2.m3u8" {
+		t.Errorf("s2.RawURL = %q, want %q", s2.RawURL, "http://oldcdn.example.org/path/2.m3u8")
+	}
+}
+
+func TestReplaceDomain_PublicSuffixReplacement_CoUk(t *testing.T) {
+	db := newTestDB(t)
+	h := &Handler{DB: db}
+	mux := newMux(h)
+
+	mid := seedMovie(t, db, "1", "Movie Two")
+	// original host with registrable domain somedomain.co.uk and subdomains
+	sid := seedSource(t, db, mid, "sd", "https://vod.play.somedomain.co.uk/video.m3u8")
+
+	body, _ := json.Marshal(map[string]string{"new_base": "example.co.uk", "source_key": "sd"})
+	req := httptest.NewRequest(http.MethodPut, "/admin/source/replace-domain", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var s models.VideoSource
+	db.First(&s, sid)
+	if s.RawURL != "https://vod.play.example.co.uk/video.m3u8" {
+		t.Errorf("RawURL = %q, want %q", s.RawURL, "https://vod.play.example.co.uk/video.m3u8")
+	}
+}
+
+func TestReplaceDomain_InvalidNewBase_ReturnsBadRequest(t *testing.T) {
+	db := newTestDB(t)
+	h := &Handler{DB: db}
+	mux := newMux(h)
+
+	body, _ := json.Marshal(map[string]string{"new_base": "not-a-domain"})
+	req := httptest.NewRequest(http.MethodPut, "/admin/source/replace-domain", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusBadRequest, rr.Body.String())
+	}
 }
 
 func TestDeleteSource_RemovesSourcesAndOrphanMovies(t *testing.T) {

@@ -5,7 +5,11 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
+
+	"golang.org/x/net/publicsuffix"
 
 	"my-movie-site/collector"
 	"my-movie-site/models"
@@ -53,6 +57,18 @@ type replaceBaseRequest struct {
 	NewBase   string `json:"new_base"`
 }
 
+// replaceDomainRequest is the JSON body for ReplaceDomain.
+type replaceDomainRequest struct {
+	SourceKey string `json:"source_key,omitempty"`
+	NewBase   string `json:"new_base"`
+}
+
+// replaceDomainResponse reports how many rows were examined and updated.
+type replaceDomainResponse struct {
+	Scanned int `json:"scanned"`
+	Updated int `json:"updated"`
+}
+
 // ReplaceBase handles PUT /admin/source/replace-base.
 // It replaces the URL prefix old_base with new_base for all VideoSource records
 // whose SourceKey matches source_key.
@@ -76,6 +92,103 @@ func (h *Handler) ReplaceBase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ReplaceDomain handles PUT /admin/source/replace-domain.
+// It replaces the base domain portion of stored VideoSource.raw_url while
+// preserving any existing subdomain parts. If SourceKey is provided in the
+// request, only VideoSource records with that source_key are updated; otherwise
+// all records are processed.
+func (h *Handler) ReplaceDomain(w http.ResponseWriter, r *http.Request) {
+	var req replaceDomainRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.NewBase == "" {
+		http.Error(w, "new_base is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate new base using publicsuffix: it must be an effective TLD+1
+	// (i.e. a registrable base domain like example.com or example.co.uk).
+	e, err := publicsuffix.EffectiveTLDPlusOne(req.NewBase)
+	if err != nil || e != req.NewBase {
+		http.Error(w, "new_base must be a registrable base domain like example.com or example.co.uk", http.StatusBadRequest)
+		return
+	}
+
+	var sources []models.VideoSource
+	q := h.DB
+	if req.SourceKey != "" {
+		q = q.Where("source_key = ?", req.SourceKey)
+	}
+	if err := q.Find(&sources).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	scanned := 0
+	updated := 0
+	for _, s := range sources {
+		scanned++
+		raw := s.RawURL
+		if raw == "" {
+			continue
+		}
+		// try parsing as absolute URL; if fails, skip
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		host := u.Host
+		port := ""
+		if strings.Contains(host, ":") {
+			parts := strings.Split(host, ":")
+			host = parts[0]
+			port = parts[1]
+		}
+		// Determine the original host's effective TLD+1 (registrable base)
+		origBase, err := publicsuffix.EffectiveTLDPlusOne(host)
+		if err != nil {
+			// skip IPs, localhost, or otherwise unparsable domains
+			continue
+		}
+		// Keep only the left-most single subdomain label (e.g. play.oldcdn.example.com -> keep "play")
+		sub := ""
+		if host != origBase {
+			labels := strings.Split(host, ".")
+			origLabels := strings.Split(origBase, ".")
+			subCount := len(labels) - len(origLabels)
+			if subCount > 0 {
+				sub = strings.Join(labels[:subCount], ".")
+			}
+		}
+		newHost := req.NewBase
+		if sub != "" {
+			newHost = sub + "." + req.NewBase
+		}
+		if port != "" {
+			newHost = newHost + ":" + port
+		}
+		// If host unchanged, skip
+		if newHost == u.Host {
+			continue
+		}
+		u.Host = newHost
+
+		newRaw := u.String()
+		// update DB record
+		if err := h.DB.Model(&models.VideoSource{}).Where("id = ?", s.ID).Update("raw_url", newRaw).Error; err != nil {
+			log.Printf("admin: failed to update video source %d: %v", s.ID, err)
+			continue
+		}
+		updated++
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(replaceDomainResponse{Scanned: scanned, Updated: updated})
 }
 
 // cleanOrphanMovies deletes any Movie that has no VideoSource records.

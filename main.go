@@ -66,6 +66,7 @@ func main() {
 	mux.HandleFunc("GET /admin", h.AdminPage)
 	mux.HandleFunc("DELETE /admin/source/{key}", h.DeleteSource)
 	mux.HandleFunc("PUT /admin/source/replace-base", h.ReplaceBase)
+	mux.HandleFunc("PUT /admin/source/replace-domain", h.ReplaceDomain)
 	mux.HandleFunc("POST /admin/sync", h.Sync)
 	mux.HandleFunc("GET /admin/collection-sources", h.ListCollectionSources)
 	mux.HandleFunc("POST /admin/collection-sources", h.CreateCollectionSource)
