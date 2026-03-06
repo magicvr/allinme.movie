@@ -229,5 +229,32 @@ func (h *Handler) Detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.renderTemplate(w, "detail.html", detailPageData{Movie: movie, Sources: movie.VideoSources, SiteTitle: h.SiteTitle})
+	// Prepare category context so detail template can render the same nav as index.
+	var activeCat, activeSubCat uint
+	if subCatIDStr := r.URL.Query().Get("sub_cat"); subCatIDStr != "" {
+		if subCatID, err := strconv.ParseUint(subCatIDStr, 10, 64); err == nil && subCatID > 0 {
+			activeSubCat = uint(subCatID)
+		}
+	}
+	if catIDStr := r.URL.Query().Get("cat"); catIDStr != "" {
+		if catID, err := strconv.ParseUint(catIDStr, 10, 64); err == nil && catID > 0 {
+			activeCat = uint(catID)
+		}
+	}
+
+	h.renderTemplate(w, "detail.html", struct {
+		Movie        models.Movie
+		Sources      []models.VideoSource
+		SiteTitle    string
+		Categories   []models.Category
+		ActiveCat    uint
+		ActiveSubCat uint
+	}{
+		Movie:        movie,
+		Sources:      movie.VideoSources,
+		SiteTitle:    h.SiteTitle,
+		Categories:   h.loadCategoryTree(),
+		ActiveCat:    activeCat,
+		ActiveSubCat: activeSubCat,
+	})
 }

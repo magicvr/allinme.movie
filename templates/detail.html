@@ -14,12 +14,12 @@
 
   <!-- Navbar -->
   <nav class="bg-gray-900 shadow-md sticky top-0 z-50">
-    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-4">
       <a href="/" class="flex items-center gap-3 shrink-0">
         <img src="/static/logo.png" alt="{{.SiteTitle}}" class="w-10 h-10 rounded" />
         <span class="text-red-500 font-bold text-xl tracking-wide">{{.SiteTitle}}</span>
       </a>
-      <form method="GET" action="/search" class="flex flex-1 max-w-xl">
+      <form method="GET" action="/search" class="flex w-full sm:flex-1 sm:max-w-xl">
         <input
           type="search"
           name="q"
@@ -31,7 +31,29 @@
           class="rounded-r-full bg-red-600 hover:bg-red-700 px-5 py-2 text-sm font-semibold transition-colors"
         >搜索</button>
       </form>
+      
     </div>
+    <!-- Category nav row (same style as index) -->
+    {{if .Categories}}
+    <div class="max-w-7xl mx-auto px-4 pb-2 flex flex-wrap gap-2 items-center">
+      <a href="/" class="px-3 py-1 rounded-full text-xs font-medium transition-colors {{if not .ActiveCat}}bg-red-600 text-white{{else}}bg-gray-800 text-gray-300 hover:bg-gray-700{{end}}">全部</a>
+      {{range .Categories}}
+      {{if .Children}}
+      {{$parentID := .ID}}
+      <div class="relative group">
+        <a href="/?cat={{.ID}}" class="inline-block px-3 py-1 rounded-full text-xs font-medium transition-colors {{if eq $.ActiveCat .ID}}bg-red-600 text-white{{else}}bg-gray-800 text-gray-300 hover:bg-gray-700{{end}}" aria-haspopup="true">{{.Name}} ▾</a>
+        <div class="absolute top-full left-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 min-w-[120px]">
+          {{range .Children}}
+          <a href="/?cat={{$parentID}}&sub_cat={{.ID}}" class="block px-4 py-2 text-xs hover:bg-gray-700 hover:text-white {{if eq $.ActiveSubCat .ID}}text-red-400 font-semibold{{else}}text-gray-300{{end}}">{{.Name}}</a>
+          {{end}}
+        </div>
+      </div>
+      {{else}}
+      <a href="/?cat={{.ID}}" class="px-3 py-1 rounded-full text-xs font-medium transition-colors {{if eq $.ActiveCat .ID}}bg-red-600 text-white{{else}}bg-gray-800 text-gray-300 hover:bg-gray-700{{end}}">{{.Name}}</a>
+      {{end}}
+      {{end}}
+    </div>
+    {{end}}
   </nav>
 
   <!-- Main content -->
@@ -252,7 +274,7 @@
         artWrap.style.position = 'fixed';
         artWrap.style.top = '0';
         artWrap.style.left = '0';
-        artWrap.style.width = '100vw';
+          artWrap.style.width = '100%';
         artWrap.style.height = '100vh';
         artWrap.style.zIndex = '99999';
         artWrap.style.borderRadius = '0';
@@ -285,11 +307,27 @@
       function enterFullscreen() {
         if (!artWrap) return;
         // If currently fill-mode, exit it before using native fullscreen
-        if (isFill) exitFill();
-        if (artWrap.requestFullscreen) artWrap.requestFullscreen();
-        else if (artWrap.webkitRequestFullscreen) artWrap.webkitRequestFullscreen();
-        else if (artWrap.mozRequestFullScreen) artWrap.mozRequestFullScreen();
-        else if (artWrap.msRequestFullscreen) artWrap.msRequestFullscreen();
+          if (isFill) exitFill();
+          // Try element fullscreen first
+          if (artWrap.requestFullscreen) {
+            artWrap.requestFullscreen();
+          } else if (artWrap.webkitRequestFullscreen) {
+            artWrap.webkitRequestFullscreen();
+          } else if (artWrap.mozRequestFullScreen) {
+            artWrap.mozRequestFullScreen();
+          } else if (artWrap.msRequestFullscreen) {
+            artWrap.msRequestFullscreen();
+          } else {
+            // Fallback for some mobile browsers (iOS Safari / older Android): attempt video element fullscreen
+            var videoEl = (art && (art.video || art.player && art.player.video)) || artWrap.querySelector('video') || document.querySelector('#artplayer video');
+            if (videoEl) {
+              if (videoEl.requestFullscreen) videoEl.requestFullscreen();
+              else if (videoEl.webkitEnterFullscreen) videoEl.webkitEnterFullscreen();
+              else if (videoEl.webkitRequestFullscreen) videoEl.webkitRequestFullscreen();
+              else if (videoEl.mozRequestFullScreen) videoEl.mozRequestFullScreen();
+              else if (videoEl.msRequestFullscreen) videoEl.msRequestFullscreen();
+            }
+          }
       }
 
       function exitFullscreen() {

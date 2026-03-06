@@ -13,12 +13,12 @@
 
   <!-- Navbar -->
   <nav class="bg-gray-900 shadow-md sticky top-0 z-50">
-    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-4">
       <a href="/" class="flex items-center gap-3 shrink-0">
         <img src="/static/logo.png" alt="{{.SiteTitle}}" class="w-10 h-10 rounded" />
         <span class="text-red-500 font-bold text-xl tracking-wide">{{.SiteTitle}}</span>
       </a>
-      <form method="GET" action="/search" class="flex flex-1 max-w-xl">
+      <form method="GET" action="/search" class="flex w-full sm:flex-1 sm:max-w-xl">
         <input
           type="search"
           name="q"
@@ -32,7 +32,7 @@
         >搜索</button>
       </form>
       <!-- Per-page selector (moved to navbar for visibility) -->
-      <form id="navbar_per_page" method="GET" action="/" class="flex items-center gap-2">
+      <form id="navbar_per_page" method="GET" action="/" class="flex items-center gap-2 mt-2 sm:mt-0">
         <input type="hidden" name="q" value="{{.Query}}" />
         <input type="hidden" name="cat" value="{{.ActiveCat}}" />
         <input type="hidden" name="sub_cat" value="{{.ActiveSubCat}}" />
