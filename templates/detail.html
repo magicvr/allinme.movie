@@ -89,7 +89,13 @@
       </div>
 
       <!-- ArtPlayer container -->
-      <div id="artplayer" class="w-full rounded-lg overflow-hidden" style="height:500px;"></div>
+      <div id="artplayer-wrap" class="relative w-full">
+        <div id="artplayer" class="w-full rounded-lg overflow-hidden" style="height:500px;"></div>
+        <div class="absolute top-2 right-2 z-50 flex gap-2">
+          <button id="player-fill-btn" aria-label="占满网页" title="占满网页" class="px-3 py-1.5 rounded-full bg-gray-800 hover:bg-gray-700 text-sm">⤢</button>
+          <button id="player-fs-btn" aria-label="全屏" title="全屏" class="px-3 py-1.5 rounded-full bg-gray-800 hover:bg-gray-700 text-sm">⛶</button>
+        </div>
+      </div>
     </div>
     {{end}}
 
@@ -223,6 +229,117 @@
         firstBtn.classList.add('bg-red-600');
         loadSource(firstBtn.dataset.url, firstBtn.textContent.trim(), getProgress());
       })();
+      // --- Fill page and Fullscreen controls ---
+      var fillBtn = document.getElementById('player-fill-btn');
+      var fsBtn = document.getElementById('player-fs-btn');
+      var artWrap = document.getElementById('artplayer-wrap');
+      var artEl = document.getElementById('artplayer');
+      var isFill = false;
+      var _prevStyle = {};
+      var _prevArtHeight = '';
+
+      function enterFill() {
+        if (isFill || !artWrap) return;
+        _prevStyle = {
+          position: artWrap.style.position || '',
+          top: artWrap.style.top || '',
+          left: artWrap.style.left || '',
+          width: artWrap.style.width || '',
+          height: artWrap.style.height || '',
+          zIndex: artWrap.style.zIndex || '',
+          borderRadius: artWrap.style.borderRadius || ''
+        };
+        artWrap.style.position = 'fixed';
+        artWrap.style.top = '0';
+        artWrap.style.left = '0';
+        artWrap.style.width = '100vw';
+        artWrap.style.height = '100vh';
+        artWrap.style.zIndex = '99999';
+        artWrap.style.borderRadius = '0';
+        document.body.style.overflow = 'hidden';
+        if (fillBtn) fillBtn.textContent = '🗗';
+        if (artEl) {
+          _prevArtHeight = artEl.style.height || '';
+          artEl.style.height = '100%';
+        }
+        isFill = true;
+        window.dispatchEvent(new Event('resize'));
+      }
+
+      function exitFill() {
+        if (!isFill || !artWrap) return;
+        artWrap.style.position = _prevStyle.position;
+        artWrap.style.top = _prevStyle.top;
+        artWrap.style.left = _prevStyle.left;
+        artWrap.style.width = _prevStyle.width;
+        artWrap.style.height = _prevStyle.height;
+        artWrap.style.zIndex = _prevStyle.zIndex;
+        artWrap.style.borderRadius = _prevStyle.borderRadius;
+        document.body.style.overflow = '';
+        if (fillBtn) fillBtn.textContent = '⤢';
+        if (artEl) artEl.style.height = _prevArtHeight;
+        isFill = false;
+        window.dispatchEvent(new Event('resize'));
+      }
+
+      function enterFullscreen() {
+        if (!artWrap) return;
+        // If currently fill-mode, exit it before using native fullscreen
+        if (isFill) exitFill();
+        if (artWrap.requestFullscreen) artWrap.requestFullscreen();
+        else if (artWrap.webkitRequestFullscreen) artWrap.webkitRequestFullscreen();
+        else if (artWrap.mozRequestFullScreen) artWrap.mozRequestFullScreen();
+        else if (artWrap.msRequestFullscreen) artWrap.msRequestFullscreen();
+      }
+
+      function exitFullscreen() {
+        if (document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement) {
+          if (document.exitFullscreen) document.exitFullscreen();
+          else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+          else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
+          else if (document.msExitFullscreen) document.msExitFullscreen();
+        }
+      }
+
+      // Update fullscreen button state when fullscreen changes
+      function onFsChange() {
+        var fsActive = !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
+        if (fsBtn) fsBtn.textContent = fsActive ? '🗗' : '⛶';
+        // when entering native fullscreen, make the inner player fill the container
+        if (fsActive) {
+          if (artEl) {
+            _prevArtHeight = artEl.style.height || '';
+            artEl.style.height = '100%';
+          }
+        } else {
+          if (artEl) artEl.style.height = _prevArtHeight;
+        }
+        // ensure player resizes
+        window.dispatchEvent(new Event('resize'));
+      }
+
+      if (fillBtn) {
+        fillBtn.addEventListener('click', function () {
+          if (isFill) exitFill(); else enterFill();
+        });
+      }
+
+      if (fsBtn) {
+        fsBtn.addEventListener('click', function () {
+          var fsActive = !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
+          if (fsActive) exitFullscreen(); else enterFullscreen();
+        });
+      }
+
+      document.addEventListener('fullscreenchange', onFsChange);
+      document.addEventListener('webkitfullscreenchange', onFsChange);
+      document.addEventListener('mozfullscreenchange', onFsChange);
+      document.addEventListener('MSFullscreenChange', onFsChange);
+
+      // allow Escape to exit fill-mode
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && isFill) exitFill();
+      });
     })();
   </script>
 </body>
