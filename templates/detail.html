@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Movie.Title}} - {{.SiteTitle}}</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/logo.png" />
+  <link rel="apple-touch-icon" href="/static/favicon.ico" />
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://unpkg.com/artplayer/dist/artplayer.css" />
 </head>
@@ -12,7 +15,10 @@
   <!-- Navbar -->
   <nav class="bg-gray-900 shadow-md sticky top-0 z-50">
     <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
-      <a href="/" class="text-red-500 font-bold text-xl tracking-wide shrink-0">{{.SiteTitle}}</a>
+      <a href="/" class="flex items-center gap-3 shrink-0">
+        <img src="/static/logo.png" alt="{{.SiteTitle}}" class="w-10 h-10 rounded" />
+        <span class="text-red-500 font-bold text-xl tracking-wide">{{.SiteTitle}}</span>
+      </a>
       <form method="GET" action="/search" class="flex flex-1 max-w-xl">
         <input
           type="search"

@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.SiteTitle}}</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/logo.png" />
+  <link rel="apple-touch-icon" href="/static/favicon.ico" />
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-950 text-white min-h-screen">
@@ -11,7 +14,10 @@
   <!-- Navbar -->
   <nav class="bg-gray-900 shadow-md sticky top-0 z-50">
     <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
-      <a href="/" class="text-red-500 font-bold text-xl tracking-wide shrink-0">{{.SiteTitle}}</a>
+      <a href="/" class="flex items-center gap-3 shrink-0">
+        <img src="/static/logo.png" alt="{{.SiteTitle}}" class="w-10 h-10 rounded" />
+        <span class="text-red-500 font-bold text-xl tracking-wide">{{.SiteTitle}}</span>
+      </a>
       <form method="GET" action="/search" class="flex flex-1 max-w-xl">
         <input
           type="search"
@@ -24,6 +30,21 @@
           type="submit"
           class="rounded-r-full bg-red-600 hover:bg-red-700 px-5 py-2 text-sm font-semibold transition-colors"
         >搜索</button>
+      </form>
+      <!-- Per-page selector (moved to navbar for visibility) -->
+      <form id="navbar_per_page" method="GET" action="/" class="flex items-center gap-2">
+        <input type="hidden" name="q" value="{{.Query}}" />
+        <input type="hidden" name="cat" value="{{.ActiveCat}}" />
+        <input type="hidden" name="sub_cat" value="{{.ActiveSubCat}}" />
+        <label for="per_page_nav" class="sr-only">每页</label>
+        <select id="per_page_nav" name="per_page" onchange="this.form.submit()" class="ml-2 bg-gray-800 border border-gray-700 text-sm text-gray-200 px-2 py-1 rounded">
+          <option value="12" {{if eq .PerPage 12}}selected{{end}}>12/页</option>
+          <option value="24" {{if eq .PerPage 24}}selected{{end}}>24/页</option>
+          <option value="36" {{if eq .PerPage 36}}selected{{end}}>36/页</option>
+          <option value="48" {{if eq .PerPage 48}}selected{{end}}>48/页</option>
+          <option value="72" {{if eq .PerPage 72}}selected{{end}}>72/页</option>
+          <option value="100" {{if eq .PerPage 100}}selected{{end}}>100/页</option>
+        </select>
       </form>
     </div>
     <!-- Category nav row (server-side rendered with two-level dropdowns) -->
@@ -114,6 +135,88 @@
       </a>
       {{end}}
     </div>
+    {{if gt .TotalPages 1}}
+    <div class="mt-6 flex items-center justify-center gap-3">
+      {{/* Prev link */}}
+      {{if gt .Page 1}}
+      <a href="javascript:void(0)" onclick="navigatePage({{sub .Page 1}})" class="px-3 py-1 rounded bg-gray-800 hover:bg-gray-700 text-sm">上一页</a>
+      {{else}}
+      <span class="px-3 py-1 rounded bg-gray-700 text-sm text-gray-500">上一页</span>
+      {{end}}
+
+      <div class="flex items-center gap-2">
+        <div class="text-sm text-gray-300">第 <span class="text-white font-semibold">{{.Page}}</span> / {{.TotalPages}} 页 · 共 {{.TotalCount}} 部</div>
+
+        <!-- per_page selector -->
+        <form id="per_page_form" method="GET" class="ml-4 flex items-center gap-2">
+          <input type="hidden" name="q" value="{{.Query}}" />
+          <input type="hidden" name="cat" value="{{.ActiveCat}}" />
+          <input type="hidden" name="sub_cat" value="{{.ActiveSubCat}}" />
+          <input type="hidden" name="page" value="{{.Page}}" />
+          <label class="text-sm text-gray-400">每页</label>
+          <select name="per_page" onchange="document.getElementById('per_page_form').page.value=1; this.form.submit()" class="bg-gray-800 text-sm px-2 py-1 rounded">
+            <option value="12" {{if eq .PerPage 12}}selected{{end}}>12</option>
+            <option value="24" {{if eq .PerPage 24}}selected{{end}}>24</option>
+            <option value="36" {{if eq .PerPage 36}}selected{{end}}>36</option>
+            <option value="48" {{if eq .PerPage 48}}selected{{end}}>48</option>
+            <option value="72" {{if eq .PerPage 72}}selected{{end}}>72</option>
+            <option value="100" {{if eq .PerPage 100}}selected{{end}}>100</option>
+          </select>
+        </form>
+
+        <div class="flex items-center gap-1 ml-4">
+          {{range .PageNumbers}}
+            {{if eq . $.Page}}
+              <span class="px-3 py-1 rounded bg-red-600 text-sm font-semibold">{{.}}</span>
+            {{else}}
+              <a href="javascript:void(0)" onclick="navigatePage({{.}})" class="px-3 py-1 rounded bg-gray-800 hover:bg-gray-700 text-sm">{{.}}</a>
+            {{end}}
+          {{end}}
+        </div>
+      </div>
+
+      {{if lt .Page .TotalPages}}
+      <a href="javascript:void(0)" onclick="navigatePage({{add .Page 1}})" class="px-3 py-1 rounded bg-red-600 hover:bg-red-700 text-sm">下一页</a>
+      {{else}}
+      <span class="px-3 py-1 rounded bg-gray-700 text-sm text-gray-500">下一页</span>
+      {{end}}
+
+      <form method="GET" class="ml-4" onsubmit="return gotoPage(this);">
+        <input type="hidden" name="q" value="{{.Query}}" />
+        <input type="hidden" name="cat" value="{{.ActiveCat}}" />
+        <input type="hidden" name="sub_cat" value="{{.ActiveSubCat}}" />
+        <input type="hidden" name="per_page" value="{{.PerPage}}" />
+        <label class="text-sm text-gray-400 mr-2">跳至</label>
+        <input name="page" type="number" min="1" max="{{.TotalPages}}" value="{{.Page}}" class="w-20 px-2 py-1 rounded bg-gray-800 text-sm" />
+        <button type="submit" class="ml-2 px-3 py-1 rounded bg-gray-700 hover:bg-red-600 text-sm">跳转</button>
+      </form>
+    </div>
+    <script>
+      function gotoPage(form){
+        var p = parseInt(form.page.value,10)||1;
+        if(p<1) p=1;
+        var max = {{.TotalPages}} || 1;
+        if(p> max) p = max;
+        form.page.value = p;
+        return true;
+      }
+      function navigatePage(p){
+        var max = {{.TotalPages}} || 1;
+        if(p<1) p=1;
+        if(p>max) p=max;
+        var q = encodeURIComponent('{{.Query}}');
+        var cat = '{{.ActiveCat}}';
+        var sub = '{{.ActiveSubCat}}';
+        var per = '{{.PerPage}}';
+        var url = '/?page=' + p;
+        if(q) url += '&q=' + q;
+        if(cat && cat !== '0') url += '&cat=' + cat;
+        if(sub && sub !== '0') url += '&sub_cat=' + sub;
+        if(per && per !== '0') url += '&per_page=' + per;
+        window.location.href = url;
+      }
+    </script>
+    {{end}}
     {{else}}
     <div class="flex flex-col items-center justify-center py-24 text-gray-500">
       <svg class="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

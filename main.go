@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"html/template"
 	"log"
 	"net/http"
@@ -41,7 +42,12 @@ func main() {
 	if tmplDir == "" {
 		tmplDir = "templates"
 	}
-	tmpl := template.Must(template.ParseGlob(tmplDir + "/*.html"))
+	funcs := template.FuncMap{
+		"eq":  func(a, b interface{}) bool { return fmt.Sprint(a) == fmt.Sprint(b) },
+		"add": func(a, b int) int { return a + b },
+		"sub": func(a, b int) int { return a - b },
+	}
+	tmpl := template.Must(template.New("").Funcs(funcs).ParseGlob(tmplDir + "/*.html"))
 
 	siteTitle := os.Getenv("SITE_TITLE")
 	if siteTitle == "" {
@@ -52,6 +58,8 @@ func main() {
 	w := &web.Handler{DB: database.DB, Tmpl: tmpl, SiteTitle: siteTitle}
 
 	mux := http.NewServeMux()
+	// serve static files from ./static at /static/ (use method-prefixed pattern to match existing route style)
+	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
 	mux.HandleFunc("GET /", w.Index)
 	mux.HandleFunc("GET /search", w.Search)
 	mux.HandleFunc("GET /movie/{id}", w.Detail)

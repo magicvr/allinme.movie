@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
@@ -9,9 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"my-movie-site/models"
+
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
-	"my-movie-site/models"
 )
 
 func newTestDB(t *testing.T) *gorm.DB {
@@ -26,9 +28,112 @@ func newTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestIndex_Pagination(t *testing.T) {
+	db := newTestDB(t)
+	// seed 55 movies with increasing update times
+	for i := 1; i <= 55; i++ {
+		title := fmt.Sprintf("Movie %03d", i)
+		seedMovie(t, db, title, "", time.Now().Add(time.Duration(i)*time.Second))
+	}
+
+	h := newHandler(t, db)
+
+	// page 1 should contain 24 items
+	req1 := httptest.NewRequest(http.MethodGet, "/?page=1", nil)
+	rr1 := httptest.NewRecorder()
+	h.Index(rr1, req1)
+	if rr1.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr1.Code)
+	}
+	body1 := rr1.Body.String()
+	count1 := strings.Count(body1, "href=\"/movie/")
+	if count1 != 24 {
+		t.Fatalf("page1 movie count = %d, want 24", count1)
+	}
+
+	// page 2 should contain 24 items
+	req2 := httptest.NewRequest(http.MethodGet, "/?page=2", nil)
+	rr2 := httptest.NewRecorder()
+	h.Index(rr2, req2)
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr2.Code)
+	}
+	body2 := rr2.Body.String()
+	count2 := strings.Count(body2, "href=\"/movie/")
+	if count2 != 24 {
+		t.Fatalf("page2 movie count = %d, want 24", count2)
+	}
+
+	// page 3 should contain remaining 7 items
+	req3 := httptest.NewRequest(http.MethodGet, "/?page=3", nil)
+	rr3 := httptest.NewRecorder()
+	h.Index(rr3, req3)
+	if rr3.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr3.Code)
+	}
+	body3 := rr3.Body.String()
+	count3 := strings.Count(body3, "href=\"/movie/")
+	if count3 != 7 {
+		t.Fatalf("page3 movie count = %d, want 7", count3)
+	}
+}
+
+func TestIndex_PageOutOfRange_ShowsLastPage(t *testing.T) {
+	db := newTestDB(t)
+	for i := 1; i <= 55; i++ {
+		title := fmt.Sprintf("Movie %03d", i)
+		seedMovie(t, db, title, "", time.Now().Add(time.Duration(i)*time.Second))
+	}
+	h := newHandler(t, db)
+	req := httptest.NewRequest(http.MethodGet, "/?page=999", nil)
+	rr := httptest.NewRecorder()
+	h.Index(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "共 55 部") {
+		t.Error("expected total count '共 55 部' to be present")
+	}
+	// expect last page to be 3
+	if !strings.Contains(body, ">3<") {
+		t.Error("expected current page to render as 3")
+	}
+}
+
+func TestIndex_PerPageParameter(t *testing.T) {
+	db := newTestDB(t)
+	for i := 1; i <= 30; i++ {
+		title := fmt.Sprintf("Movie %03d", i)
+		seedMovie(t, db, title, "", time.Now().Add(time.Duration(i)*time.Second))
+	}
+	h := newHandler(t, db)
+
+	// request per_page=10
+	req := httptest.NewRequest(http.MethodGet, "/?per_page=10&page=1", nil)
+	rr := httptest.NewRecorder()
+	h.Index(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "共 30 部") {
+		t.Error("expected total count '共 30 部' to be present")
+	}
+	count := strings.Count(body, "href=\"/movie/")
+	if count != 10 {
+		t.Fatalf("per_page=10 movie count = %d, want 10", count)
+	}
+}
+
 func newHandler(t *testing.T, db *gorm.DB) *Handler {
 	t.Helper()
-	tmpl, err := template.ParseGlob("../templates/*.html")
+	funcs := template.FuncMap{
+		"eq":  func(a, b interface{}) bool { return fmt.Sprint(a) == fmt.Sprint(b) },
+		"add": func(a, b int) int { return a + b },
+		"sub": func(a, b int) int { return a - b },
+	}
+	tmpl, err := template.New("..").Funcs(funcs).ParseGlob("../templates/*.html")
 	if err != nil {
 		t.Fatalf("parse template: %v", err)
 	}

@@ -15,9 +15,9 @@ import (
 // Scheduler wraps a cron runner and the configuration needed to create
 // Collector instances on each invocation.
 type Scheduler struct {
-	c          *cron.Cron
-	apiURL     string
-	db         *gorm.DB
+	c      *cron.Cron
+	apiURL string
+	db     *gorm.DB
 	// IncrementalHours is the look-back window passed to incremental runs.
 	// Defaults to 24 (hours).
 	IncrementalHours int

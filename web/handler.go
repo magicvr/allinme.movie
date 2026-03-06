@@ -30,6 +30,11 @@ type pageData struct {
 	ActiveCat    uint              // selected parent category ID (from ?cat=)
 	ActiveSubCat uint              // selected sub-category ID (from ?sub_cat=)
 	SiteTitle    string
+	Page         int
+	TotalPages   int
+	TotalCount   int
+	PerPage      int
+	PageNumbers  []int
 }
 
 // detailPageData is passed to the detail template.
@@ -43,13 +48,34 @@ type detailPageData struct {
 func (h *Handler) Index(w http.ResponseWriter, r *http.Request) {
 	categories := h.loadCategoryTree()
 
-	db := h.DB.Order("update_time desc").Limit(60)
+	// pagination
+	perPage := 24
+	// support per_page query parameter (clamped)
+	if pp := r.URL.Query().Get("per_page"); pp != "" {
+		if n, err := strconv.Atoi(pp); err == nil && n > 0 {
+			if n > 200 {
+				n = 200
+			}
+			perPage = n
+		}
+	}
+
+	page := 1
+	if p := r.URL.Query().Get("page"); p != "" {
+		if pi, err := strconv.Atoi(p); err == nil && pi > 0 {
+			page = pi
+		}
+	}
+
 	var activeCat, activeSubCat uint
+
+	// build a filtered query for counting and fetching
+	filtered := h.DB.Model(&models.Movie{})
 
 	if subCatIDStr := r.URL.Query().Get("sub_cat"); subCatIDStr != "" {
 		if subCatID, err := strconv.ParseUint(subCatIDStr, 10, 64); err == nil && subCatID > 0 {
 			activeSubCat = uint(subCatID)
-			db = db.Where("category_id = ?", subCatID)
+			filtered = filtered.Where("category_id = ?", subCatID)
 		}
 	}
 
@@ -59,7 +85,7 @@ func (h *Handler) Index(w http.ResponseWriter, r *http.Request) {
 			if activeSubCat == 0 {
 				// Show all movies whose category is a direct child of this parent,
 				// or the parent itself (covers categories with no sub-divisions).
-				db = db.Where(
+				filtered = filtered.Where(
 					"category_id IN (SELECT id FROM categories WHERE parent_id = ? AND enabled = 1) OR category_id = ?",
 					catID, catID,
 				)
@@ -68,21 +94,70 @@ func (h *Handler) Index(w http.ResponseWriter, r *http.Request) {
 	} else if catIDStr := r.URL.Query().Get("category_id"); catIDStr != "" {
 		// Backward-compatible parameter kept for existing links.
 		if catID, err := strconv.ParseUint(catIDStr, 10, 64); err == nil && catID > 0 {
-			db = db.Where("category_id = ?", catID)
+			filtered = filtered.Where("category_id = ?", catID)
 		}
 	}
 
-	var movies []models.Movie
-	if err := db.Find(&movies).Error; err != nil {
+	var total int64
+	if err := filtered.Count(&total).Error; err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	totalPages := 1
+	if total > 0 {
+		totalPages = int((total + int64(perPage) - 1) / int64(perPage))
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	if page < 1 {
+		page = 1
+	}
+
+	offset := (page - 1) * perPage
+
+	var movies []models.Movie
+	if err := filtered.Order("update_time desc").Offset(offset).Limit(perPage).Find(&movies).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// compute page numbers to display (max 7)
+	maxDisplay := 7
+	var pageNumbers []int
+	if totalPages <= maxDisplay {
+		for i := 1; i <= totalPages; i++ {
+			pageNumbers = append(pageNumbers, i)
+		}
+	} else {
+		half := maxDisplay / 2
+		start := page - half
+		end := start + maxDisplay - 1
+		if start < 1 {
+			start = 1
+			end = maxDisplay
+		}
+		if end > totalPages {
+			end = totalPages
+			start = end - maxDisplay + 1
+		}
+		for i := start; i <= end; i++ {
+			pageNumbers = append(pageNumbers, i)
+		}
+	}
+
 	h.render(w, pageData{
 		Movies:       movies,
 		Categories:   categories,
 		ActiveCat:    activeCat,
 		ActiveSubCat: activeSubCat,
 		SiteTitle:    h.SiteTitle,
+		Page:         page,
+		TotalPages:   totalPages,
+		TotalCount:   int(total),
+		PerPage:      perPage,
+		PageNumbers:  pageNumbers,
 	})
 }
 

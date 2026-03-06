@@ -21,6 +21,7 @@ WORKDIR /app
 
 COPY --from=builder /app/movie-server .
 COPY --from=builder /app/templates ./templates
+COPY --from=builder /app/static ./static
 
 RUN mkdir -p /app/data /app/logs
 
