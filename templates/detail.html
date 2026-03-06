@@ -105,6 +105,7 @@
         {{range .Sources}}
         <button
           data-url="{{.RawURL}}"
+          data-id="{{.ID}}"
           class="source-btn px-4 py-1.5 rounded-full text-sm font-medium bg-gray-700 hover:bg-red-600 transition-colors"
         >{{.SourceKey}}{{if .SourceName}}-{{.SourceName}}{{end}}</button>
         {{end}}
@@ -136,7 +137,10 @@
       var moviePoster = '{{.Movie.Poster | js}}';
 
       // --- Watch history helpers ---
-      function saveHistory(sourceKey) {
+      var currentSourceId = '';
+      var currentSourceKey = '';
+
+      function saveHistory(sourceId, sourceKey) {
         var raw = localStorage.getItem(HISTORY_KEY);
         var list;
         try { list = raw ? JSON.parse(raw) : []; } catch (e) { list = []; }
@@ -146,6 +150,7 @@
           id: movieId,
           title: movieTitle,
           poster: moviePoster,
+          sourceId: sourceId,
           sourceKey: sourceKey,
           timestamp: Date.now()
         });
@@ -155,17 +160,19 @@
 
       // --- Playback progress helpers ---
       function saveProgress(seconds) {
+        if (!currentSourceId) return;
         var raw = localStorage.getItem(PROGRESS_KEY);
         var map;
         try { map = raw ? JSON.parse(raw) : {}; } catch (e) { map = {}; }
-        map[movieId] = seconds;
+        var key = movieId + '|' + currentSourceId;
+        map[key] = seconds;
         localStorage.setItem(PROGRESS_KEY, JSON.stringify(map));
       }
 
-      function getProgress() {
+      function getProgressFor(sourceId) {
         var raw = localStorage.getItem(PROGRESS_KEY);
         if (!raw) return 0;
-        try { var map = JSON.parse(raw); return map[movieId] || 0; } catch (e) { return 0; }
+        try { var map = JSON.parse(raw); return map[movieId + '|' + sourceId] || 0; } catch (e) { return 0; }
       }
 
       // --- Player ---
@@ -175,11 +182,13 @@
       var art = null;
       var _lastSaved = 0;
 
-      function loadSource(url, sourceKey, seek) {
+      function loadSource(url, sourceId, sourceKey, seek) {
         if (art) {
           art.destroy(false);
           art = null;
         }
+        currentSourceId = sourceId || '';
+        currentSourceKey = sourceKey || '';
         art = new Artplayer({
           container: '#artplayer',
           url: url,
@@ -219,7 +228,7 @@
           });
         });
 
-        saveHistory(sourceKey);
+        saveHistory(sourceId, sourceKey);
       }
 
       function formatTime(seconds) {
@@ -236,20 +245,36 @@
           });
           btn.classList.remove('bg-gray-700');
           btn.classList.add('bg-red-600');
-          loadSource(btn.dataset.url, btn.textContent.trim(), 0);
+          // When user clicks manually, attempt to resume if we have saved progress for that source
+          var sid = btn.dataset.id || btn.getAttribute('data-id');
+          var key = btn.textContent.trim();
+          var saved = getProgressFor(sid) || 0;
+          loadSource(btn.dataset.url, sid, key, saved);
         });
       });
 
       // Auto-load the first source, prompting resume if progress exists
       (function () {
-        var firstBtn = btns[0];
+        var params = new URLSearchParams(window.location.search);
+        var sourceParam = params.get('source_id');
+        var chosenBtn = null;
+        if (sourceParam) {
+          try { sourceParam = decodeURIComponent(sourceParam); } catch (e) {}
+          btns.forEach(function (b) {
+            if ((b.dataset.id || b.getAttribute('data-id')) === sourceParam) chosenBtn = b;
+          });
+        }
+        if (!chosenBtn) chosenBtn = btns[0];
         btns.forEach(function (b) {
           b.classList.remove('bg-red-600');
           b.classList.add('bg-gray-700');
         });
-        firstBtn.classList.remove('bg-gray-700');
-        firstBtn.classList.add('bg-red-600');
-        loadSource(firstBtn.dataset.url, firstBtn.textContent.trim(), getProgress());
+        chosenBtn.classList.remove('bg-gray-700');
+        chosenBtn.classList.add('bg-red-600');
+        var sid = chosenBtn.dataset.id || chosenBtn.getAttribute('data-id');
+        var key = chosenBtn.textContent.trim();
+        var saved = getProgressFor(sid) || 0;
+        loadSource(chosenBtn.dataset.url, sid, key, saved);
       })();
       // --- Fill page and Fullscreen controls ---
       var fillBtn = document.getElementById('player-fill-btn');

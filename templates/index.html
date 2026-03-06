@@ -240,8 +240,10 @@
       var section = document.getElementById('watch-history-section');
       var grid = document.getElementById('watch-history-grid');
       list.forEach(function (item) {
-        var a = document.createElement('a');
-        a.href = '/movie/' + item.id;
+      var a = document.createElement('a');
+      var href = '/movie/' + item.id;
+      if (item.sourceId) href += '?source_id=' + encodeURIComponent(item.sourceId);
+      a.href = href;
         a.className = 'group block rounded-lg overflow-hidden bg-gray-800 hover:ring-2 hover:ring-red-500 transition-all duration-200';
           if (item.poster) {
           var container = document.createElement('div');
