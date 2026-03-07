@@ -28,6 +28,8 @@ type Handler struct {
 	syncing bool
 }
 
+const ParseInterfaceKey = "parse_interface"
+
 // DeleteSource handles DELETE /admin/source/{key}.
 // It removes all VideoSource records with the given SourceKey, then cascades to
 // delete any Movie that has no remaining VideoSources.
@@ -256,11 +258,58 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 // AdminPage handles GET /admin – serves the admin management page.
 func (h *Handler) AdminPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	data := struct{ SiteTitle string }{SiteTitle: h.SiteTitle}
+	// load current parse interface setting if present
+	var s models.Setting
+	pi := ""
+	if err := h.DB.First(&s, "key = ?", ParseInterfaceKey).Error; err == nil {
+		pi = s.Value
+	}
+	data := struct {
+		SiteTitle      string
+		ParseInterface string
+	}{SiteTitle: h.SiteTitle, ParseInterface: pi}
 	if err := h.Tmpl.ExecuteTemplate(w, "admin.html", data); err != nil {
 		log.Printf("admin: template error: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 	}
+}
+
+// GetParseInterface handles GET /admin/parse-interface (for admin UI)
+func (h *Handler) GetParseInterface(w http.ResponseWriter, r *http.Request) {
+	var s models.Setting
+	pi := ""
+	if err := h.DB.First(&s, "key = ?", ParseInterfaceKey).Error; err == nil {
+		pi = s.Value
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"url": pi})
+}
+
+// SetParseInterface handles PUT /admin/parse-interface
+// Body: {"url":"https://example/?url="} or {"url":""} to clear
+func (h *Handler) SetParseInterface(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	// allow empty to clear
+	if req.URL != "" {
+		u, err := url.Parse(req.URL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			http.Error(w, "invalid url, must be http(s)", http.StatusBadRequest)
+			return
+		}
+	}
+	// upsert setting
+	s := models.Setting{Key: ParseInterfaceKey, Value: req.URL}
+	if err := h.DB.Save(&s).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // collectionSourceRequest is the JSON body for CreateCollectionSource.

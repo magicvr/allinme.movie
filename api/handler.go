@@ -6,13 +6,25 @@ import (
 	"strconv"
 	"strings"
 
-	"gorm.io/gorm"
 	"my-movie-site/models"
+
+	"gorm.io/gorm"
 )
 
 // Handler holds dependencies for API HTTP handlers.
 type Handler struct {
 	DB *gorm.DB
+}
+
+// GetParseInterface handles GET /api/parse-interface and returns {url: "..."}
+func (h *Handler) GetParseInterface(w http.ResponseWriter, r *http.Request) {
+	var s models.Setting
+	pi := ""
+	if err := h.DB.First(&s, "key = ?", "parse_interface").Error; err == nil {
+		pi = s.Value
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"url": pi})
 }
 
 // moviesResponse is the paginated response for GET /api/movies.

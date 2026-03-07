@@ -36,7 +36,7 @@ func Init(dsn string) {
 	sqlDB.SetMaxOpenConns(10)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
-	if err = DB.AutoMigrate(&models.Movie{}, &models.VideoSource{}, &models.CollectionSource{}, &models.CategoryMap{}, &models.Category{}); err != nil {
+	if err = DB.AutoMigrate(&models.Movie{}, &models.VideoSource{}, &models.CollectionSource{}, &models.CategoryMap{}, &models.Category{}, &models.Setting{}); err != nil {
 		log.Fatalf("failed to auto migrate: %v", err)
 	}
 

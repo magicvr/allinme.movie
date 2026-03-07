@@ -44,6 +44,20 @@
 
       <p id="sync-status" class="mt-3 text-sm hidden" role="status" aria-live="polite"></p>
     </section>
+    <!-- 解析接口配置 -->
+    <section class="bg-gray-900 rounded-xl p-6 mt-6 max-w-md">
+      <h2 class="text-lg font-semibold mb-2 text-gray-100">解析接口 (解析/转链)</h2>
+      <p class="text-sm text-gray-400 mb-4">设置外部解析/转链服务的基础 URL，例如：<code>https://mtjiexi.cc:966/?url=</code>。留空表示不使用解析接口，直接使用内置播放器。</p>
+
+      <div class="flex flex-col gap-2">
+        <input id="parse-interface-input" type="text" placeholder="解析接口 URL（留空表示不指定）" value="{{.ParseInterface}}" class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100" />
+        <div class="flex items-center gap-2">
+          <button id="save-parse-btn" onclick="saveParseInterface()" class="inline-flex items-center gap-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 px-4 py-2 text-sm font-semibold">保存</button>
+        </div>
+      </div>
+
+      <p id="parse-status" class="mt-3 text-sm hidden" role="status" aria-live="polite">{{if .ParseInterface}}{{.ParseInterface}}{{else}}尚未指定解析接口{{end}}</p>
+    </section>
     <!-- 线路替换（后端替换数据库中播放地址的基础域名） -->
     <section class="bg-gray-900 rounded-xl p-6 mt-6 max-w-md">
       <h2 class="text-lg font-semibold mb-2 text-gray-100">线路替换</h2>
@@ -148,6 +162,29 @@
       }).catch(function (err) {
         status.className = 'mt-3 text-sm text-red-400';
         status.textContent = '替换失败：' + err.message;
+      });
+    }
+  </script>
+  <script>
+    function saveParseInterface() {
+      var input = document.getElementById('parse-interface-input');
+      var status = document.getElementById('parse-status');
+      var url = input.value && input.value.trim();
+      status.className = 'mt-3 text-sm text-gray-400';
+      status.textContent = '正在保存…';
+      status.classList.remove('hidden');
+
+      fetch('/admin/parse-interface', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url })
+      }).then(function (res) {
+        if (!res.ok) return res.text().then(function (t) { throw new Error(t || res.statusText); });
+        status.className = 'mt-3 text-sm text-green-400';
+        status.textContent = url || '尚未指定解析接口';
+      }).catch(function (err) {
+        status.className = 'mt-3 text-sm text-red-400';
+        status.textContent = '保存失败：' + err.message;
       });
     }
   </script>

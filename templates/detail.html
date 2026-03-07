@@ -143,6 +143,14 @@
       var movieId    = '{{.Movie.ID}}';
       var movieTitle = '{{.Movie.Title | js}}';
       var moviePoster = '{{.Movie.Poster | js}}';
+      var parseInterface = '';
+      // load parse interface (may be empty)
+      fetch('/api/parse-interface').then(function (res) {
+        if (!res.ok) return;
+        return res.json();
+      }).then(function (data) {
+        if (data && data.url) parseInterface = data.url;
+      }).catch(function () {});
 
       // --- Watch history helpers ---
       var currentSourceId = '';
@@ -190,13 +198,25 @@
       var art = null;
       var _lastSaved = 0;
 
-      function loadSource(url, sourceId, sourceKey, seek) {
+      function loadSource(url, sourceId, sourceKey, seek, noParse) {
         if (art) {
           art.destroy(false);
           art = null;
         }
         currentSourceId = sourceId || '';
         currentSourceKey = sourceKey || '';
+        var originalUrl = url;
+        var usingParsed = false;
+        if (!noParse && parseInterface) {
+          // try parse interface first
+          try {
+            url = parseInterface + encodeURIComponent(originalUrl);
+            usingParsed = true;
+          } catch (e) {
+            url = originalUrl;
+            usingParsed = false;
+          }
+        }
         art = new Artplayer({
           container: '#artplayer',
           url: url,
@@ -214,6 +234,18 @@
             },
           },
         });
+
+        var _fallbackTimer = null;
+        var _played = false;
+        if (usingParsed) {
+          // if parsed attempt doesn't start playing within 8s or errors, fallback to original URL
+          _fallbackTimer = setTimeout(function () {
+            if (!_played) {
+              try { art.destroy(false); } catch (e) {}
+              loadSource(originalUrl, sourceId, sourceKey, seek, true);
+            }
+          }, 8000);
+        }
 
         art.on('ready', function () {
           // Seek to saved progress if applicable
@@ -234,6 +266,16 @@
           art.on('video:ended', function () {
             saveProgress(0);
           });
+          _played = true;
+          if (_fallbackTimer) { clearTimeout(_fallbackTimer); _fallbackTimer = null; }
+        });
+
+        art.on('error', function () {
+          // On error, fallback to original URL if we were using parsed
+          if (usingParsed) {
+            try { art.destroy(false); } catch (e) {}
+            loadSource(originalUrl, sourceId, sourceKey, seek, true);
+          }
         });
 
         saveHistory(sourceId, sourceKey);
