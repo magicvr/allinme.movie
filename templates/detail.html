@@ -197,6 +197,7 @@
 
       var art = null;
       var _lastSaved = 0;
+      var _isSeeking = false;
 
       function loadSource(url, sourceId, sourceKey, seek, noParse) {
         if (art) {
@@ -251,20 +252,29 @@
           // Seek to saved progress if applicable
           if (seek && seek > 5) {
             if (confirm('上次看到 ' + formatTime(seek) + '，是否继续播放？')) {
-              art.seek = seek;
+              try {
+                if (typeof art.seek === 'function') art.seek(seek);
+                else art.currentTime = seek;
+              } catch (e) {}
             }
           }
-          // Save progress every 5 seconds
+          // Track seeking state to avoid heavy work while user is dragging/seeking
+          try {
+            art.on('seeking', function () { _isSeeking = true; });
+            art.on('seeked', function () { _isSeeking = false; _lastSaved = Math.floor(art.currentTime); saveProgress(_lastSaved); });
+          } catch (e) {}
+          // Save progress every 5 seconds (skip while actively seeking)
           art.on('timeupdate', function () {
+            if (_isSeeking) return;
             var t = Math.floor(art.currentTime);
             if (t > 5 && t - _lastSaved >= 5) {
               _lastSaved = t;
-              saveProgress(t);
+              try { saveProgress(t); } catch (e) {}
             }
           });
           // Clear progress when video ends
           art.on('video:ended', function () {
-            saveProgress(0);
+            try { saveProgress(0); } catch (e) {}
           });
           _played = true;
           if (_fallbackTimer) { clearTimeout(_fallbackTimer); _fallbackTimer = null; }
@@ -274,6 +284,7 @@
           // On error, fallback to original URL if we were using parsed
           if (usingParsed) {
             try { art.destroy(false); } catch (e) {}
+            if (_fallbackTimer) { clearTimeout(_fallbackTimer); _fallbackTimer = null; }
             loadSource(originalUrl, sourceId, sourceKey, seek, true);
           }
         });
